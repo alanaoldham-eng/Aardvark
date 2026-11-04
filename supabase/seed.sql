@@ -89,3 +89,29 @@ where not exists (
   where a.van_id = 'van-1' and a.drive_min is not null
     and (a.starts_at at time zone 'America/Chicago')::date = (now() at time zone 'America/Chicago')::date
 );
+
+-- ---------------------------------------------------------------------
+-- Online booking defaults (safe to re-run; edit prices in Table Editor →
+-- services, and hours in the app under Business → Availability)
+-- Prices are PLACEHOLDERS based on the Strategic Master Plan tiers.
+-- ---------------------------------------------------------------------
+insert into public.services (id, name, description, species, min_weight, max_weight, duration_min, price, is_addon, sort) values
+  ('dog-small',  'Full groom · small dog',   'Bath, blow-dry, haircut, nails, ears and sanitary trim. Up to 20 lb.',            'Dog', 0,   20,  75, 70,  false, 10),
+  ('dog-medium', 'Full groom · medium dog',  'Bath, blow-dry, haircut, nails, ears and sanitary trim. 21–50 lb.',               'Dog', 21,  50,  90, 90,  false, 20),
+  ('dog-large',  'Full groom · large dog',   'Bath, blow-dry, haircut, nails, ears and sanitary trim. 51–80 lb.',               'Dog', 51,  80, 105, 110, false, 30),
+  ('dog-xl',     'Full groom · XL or doodle','For 80 lb+ dogs, doodles and heavy coats that need extra time.',                  'Dog', 81, 300, 120, 140, false, 40),
+  ('bath-small', 'Bath & tidy · up to 40 lb','Bath, blow-dry, brush-out, nails, ears and a face/feet/sanitary tidy. No haircut.', 'Dog', 0,   40,  50, 55,  false, 50),
+  ('bath-large', 'Bath & tidy · 41 lb+',     'Bath, blow-dry, brush-out, nails, ears and a face/feet/sanitary tidy. No haircut.', 'Dog', 41, 300,  65, 70,  false, 60),
+  ('cat-groom',  'Cat groom',                'Gentle bath, dry, brush-out, nails and sanitary trim.',                           'Cat', 0,  100,  75, 95,  false, 70),
+  ('nails',      'Nail trim & file',         'Quick nail trim and smoothing, dogs or cats.',                                    'Any', 0,  300,  15, 25,  false, 80),
+  ('addon-deshed',  'De-shedding treatment', 'Loosens and removes undercoat. Great for double coats.', 'Any', null, null, 15, 15, true, 110),
+  ('addon-demat',   'Dematting',             'Extra time for tangles and mats.',                       'Any', null, null, 20, 20, true, 120),
+  ('addon-teeth',   'Teeth brushing',        'Enzymatic toothpaste and fresh breath.',                 'Any', null, null,  5, 10, true, 130),
+  ('addon-facial',  'Blueberry facial',      'Brightening face wash.',                                 'Dog', null, null,  5,  8, true, 140),
+  ('addon-pawbalm', 'Paw balm',              'Soothes and protects paw pads.',                         'Any', null, null,  5,  8, true, 150)
+on conflict (id) do nothing;
+
+-- Van 1 works Monday–Friday, 8:00 AM – 5:00 PM (change in the app)
+insert into public.van_hours (van_id, weekday, start_time, end_time)
+select 'van-1', d, time '08:00', time '17:00' from generate_series(1, 5) d
+on conflict (van_id, weekday) do nothing;

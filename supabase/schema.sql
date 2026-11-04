@@ -160,12 +160,32 @@ $$;
 
 -- New sign-in users get an inactive 'groomer' staff row. Activate them (and make
 -- yourself owner) with the SQL in SETUP.md, or in Table Editor → staff.
+-- Who is signing up? Customers (account_type = 'customer', from the booking app)
+-- get a client record — linked to any earlier guest bookings with the same email.
+-- Everyone else (staff sign-up form, or users added in the Supabase dashboard)
+-- gets an INACTIVE staff record that an owner approves on the Team screen.
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
+declare
+  meta jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb);
+  nm text := coalesce(nullif(trim(meta->>'full_name'), ''), split_part(new.email, '@', 1));
+  cid uuid;
 begin
-  insert into public.staff (id, full_name, email)
-  values (new.id, coalesce(nullif(trim(new.raw_user_meta_data->>'full_name'), ''), split_part(new.email, '@', 1)), new.email)
-  on conflict (id) do update set email = excluded.email;
+  if meta->>'account_type' = 'customer' then
+    select id into cid from public.clients
+     where user_id is null and email is not null and lower(email) = lower(new.email)
+     order by created_at desc limit 1;
+    if cid is not null then
+      update public.clients set user_id = new.id where id = cid;
+    else
+      insert into public.clients (user_id, name, email, phone)
+      values (new.id, nm, new.email, nullif(trim(meta->>'phone'), ''));
+    end if;
+  else
+    insert into public.staff (id, full_name, email)
+    values (new.id, nm, new.email)
+    on conflict (id) do update set email = excluded.email;
+  end if;
   return new;
 end $$;
 
@@ -311,3 +331,400 @@ drop policy if exists "owner reads waitlist" on public.waitlist;
 create policy "owner reads waitlist" on public.waitlist for select to authenticated using (public.is_owner());
 drop policy if exists "owner deletes waitlist" on public.waitlist;
 create policy "owner deletes waitlist" on public.waitlist for delete to authenticated using (public.is_owner());
+
+-- =====================================================================
+-- ONLINE BOOKING
+-- Customers book from the public app. Every time offered is checked against
+-- the van's working hours, time off, the day's other stops, and the drive
+-- time between GPS coordinates, so the groomer can actually make every stop.
+-- =====================================================================
+
+-- ---------- Settings (one row) — owners edit these in the app ----------
+create table if not exists public.booking_settings (
+  id                    int primary key default 1 check (id = 1),
+  timezone              text    not null default 'America/Chicago',
+  slot_step_min         int     not null default 30  check (slot_step_min between 5 and 120),
+  buffer_min            int     not null default 10  check (buffer_min between 0 and 60),   -- park, set up, pack up between stops
+  avg_speed_mph         numeric not null default 28  check (avg_speed_mph between 5 and 70), -- typical city driving speed
+  road_factor           numeric not null default 1.35 check (road_factor between 1 and 3),  -- roads aren't straight: GPS distance × this
+  service_radius_miles  numeric not null default 25  check (service_radius_miles > 0),
+  lead_time_hours       int     not null default 18  check (lead_time_hours >= 0),
+  booking_window_days   int     not null default 21  check (booking_window_days between 1 and 90),
+  max_stops_per_day     int     not null default 6   check (max_stops_per_day between 1 and 20),
+  trip_fee              numeric(8,2) not null default 10 check (trip_fee >= 0),
+  extra_pet_discount    numeric(8,2) not null default 5  check (extra_pet_discount >= 0),
+  min_cancel_hours      int     not null default 24  check (min_cancel_hours >= 0)
+);
+insert into public.booking_settings (id) values (1) on conflict (id) do nothing;
+
+-- ---------- Service menu ----------
+create table if not exists public.services (
+  id           text primary key,
+  name         text not null,
+  description  text,
+  species      text not null default 'Dog' check (species in ('Dog', 'Cat', 'Any')),
+  min_weight   numeric,                 -- lbs; helps suggest the right size tier
+  max_weight   numeric,
+  duration_min int  not null check (duration_min between 5 and 480),
+  price        numeric(8,2) not null check (price >= 0),
+  is_addon     boolean not null default false,
+  active       boolean not null default true,
+  sort         int not null default 0
+);
+
+-- ---------- Groomer / van schedules ----------
+create table if not exists public.van_hours (
+  van_id      text not null references public.vans(id) on delete cascade,
+  weekday     int  not null check (weekday between 0 and 6),   -- 0 = Sunday … 6 = Saturday
+  start_time  time not null,
+  end_time    time not null,
+  primary key (van_id, weekday),
+  check (end_time > start_time)
+);
+
+create table if not exists public.time_off (
+  id         uuid primary key default gen_random_uuid(),
+  van_id     text not null references public.vans(id) on delete cascade,
+  starts_at  timestamptz not null,
+  ends_at    timestamptz not null,
+  reason     text,
+  created_at timestamptz not null default now(),
+  check (ends_at > starts_at)
+);
+create index if not exists time_off_van_idx on public.time_off(van_id, starts_at);
+
+-- ---------- Columns for customer accounts and online bookings ----------
+alter table public.clients add column if not exists user_id uuid unique references auth.users(id) on delete set null;
+alter table public.clients add column if not exists street text;
+alter table public.clients add column if not exists city   text;
+alter table public.clients add column if not exists state  text;
+alter table public.clients add column if not exists zip    text;
+alter table public.appointments add column if not exists booking_id     uuid;
+alter table public.appointments add column if not exists source         text not null default 'staff';
+alter table public.appointments add column if not exists customer_notes text;
+alter table public.appointments add column if not exists address        text;
+create index if not exists appointments_booking_idx on public.appointments(booking_id);
+
+-- ---------- Distance + drive time from GPS coordinates ----------
+create or replace function public.gps_miles(lat1 float8, lng1 float8, lat2 float8, lng2 float8)
+returns float8 language sql immutable as $$
+  select 3958.8 * 2 * asin(sqrt(
+           power(sin(radians(lat2 - lat1) / 2), 2) +
+           cos(radians(lat1)) * cos(radians(lat2)) * power(sin(radians(lng2 - lng1) / 2), 2)));
+$$;
+
+-- Estimated driving minutes between two stops (0 = same address).
+-- Unknown locations are treated as 20 minutes away, to stay on the safe side.
+create or replace function public.travel_minutes(lat1 float8, lng1 float8, lat2 float8, lng2 float8)
+returns int language sql stable set search_path = public as $$
+  select case
+    when lat1 is null or lng1 is null or lat2 is null or lng2 is null then 20
+    when public.gps_miles(lat1, lng1, lat2, lng2) < 0.05 then 0
+    else ceil(public.gps_miles(lat1, lng1, lat2, lng2) * s.road_factor / s.avg_speed_mph * 60)::int
+  end
+  from public.booking_settings s where s.id = 1;
+$$;
+
+-- Can van v take a job of dur minutes at time t, at this location?
+create or replace function public.slot_is_free(v text, t timestamptz, dur int, p_lat float8, p_lng float8)
+returns boolean language plpgsql stable security definer set search_path = public as $$
+declare
+  st public.booking_settings;
+  local_day date;
+  h public.van_hours;
+  win_start timestamptz; win_end timestamptz;
+  e timestamptz := t + make_interval(mins => dur);
+  prev record; nxt record;
+  gap int;
+begin
+  select * into st from public.booking_settings where id = 1;
+  if t < now() + make_interval(hours => st.lead_time_hours) then return false; end if;
+  local_day := (t at time zone st.timezone)::date;
+  select * into h from public.van_hours where van_id = v and weekday = extract(dow from local_day)::int;
+  if not found then return false; end if;
+  win_start := (local_day + h.start_time) at time zone st.timezone;
+  win_end   := (local_day + h.end_time)   at time zone st.timezone;
+  if t < win_start or e > win_end then return false; end if;
+
+  if exists (select 1 from public.time_off o where o.van_id = v and o.starts_at < e and o.ends_at > t) then
+    return false;
+  end if;
+
+  -- Daily stop limit (several pets at one address count as one stop)
+  if (select count(distinct (round(a.lat::numeric, 4), round(a.lng::numeric, 4)))
+        from public.appointments a
+       where a.van_id = v and a.status <> 'Cancelled'
+         and a.starts_at >= win_start and a.starts_at < win_end)
+     >= st.max_stops_per_day
+     and not exists (select 1 from public.appointments a
+                      where a.van_id = v and a.status <> 'Cancelled'
+                        and a.starts_at >= win_start and a.starts_at < win_end
+                        and public.travel_minutes(a.lat, a.lng, p_lat, p_lng) = 0) then
+    return false;
+  end if;
+
+  -- No overlap with another job
+  if exists (select 1 from public.appointments a
+              where a.van_id = v and a.status <> 'Cancelled'
+                and a.starts_at < e and a.starts_at + make_interval(mins => a.duration_min) > t) then
+    return false;
+  end if;
+
+  -- Enough time to drive here from the previous stop…
+  select a.lat, a.lng, a.starts_at + make_interval(mins => a.duration_min) as ends_at into prev
+    from public.appointments a
+   where a.van_id = v and a.status <> 'Cancelled'
+     and a.starts_at >= win_start and a.starts_at + make_interval(mins => a.duration_min) <= t
+   order by a.starts_at + make_interval(mins => a.duration_min) desc limit 1;
+  if found then
+    gap := public.travel_minutes(prev.lat, prev.lng, p_lat, p_lng);
+    if gap > 0 then gap := gap + st.buffer_min; end if;
+    if prev.ends_at + make_interval(mins => gap) > t then return false; end if;
+  end if;
+
+  -- …and from here to the next stop
+  select a.lat, a.lng, a.starts_at into nxt
+    from public.appointments a
+   where a.van_id = v and a.status <> 'Cancelled'
+     and a.starts_at >= e and a.starts_at < win_end
+   order by a.starts_at asc limit 1;
+  if found then
+    gap := public.travel_minutes(p_lat, p_lng, nxt.lat, nxt.lng);
+    if gap > 0 then gap := gap + st.buffer_min; end if;
+    if e + make_interval(mins => gap) > nxt.starts_at then return false; end if;
+  end if;
+
+  return true;
+end $$;
+
+-- Is this location inside the service area? Returns distance to the nearest van base.
+create or replace function public.check_service_area(p_lat float8, p_lng float8)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'miles', round(min(public.gps_miles(v.depot_lat, v.depot_lng, p_lat, p_lng))::numeric, 1),
+    'ok',    coalesce(min(public.gps_miles(v.depot_lat, v.depot_lng, p_lat, p_lng)) <= max(s.service_radius_miles), false),
+    'radius', max(s.service_radius_miles))
+  from public.vans v cross join public.booking_settings s
+  where v.active and v.depot_lat is not null and s.id = 1;
+$$;
+
+-- Bookable start times for a job of dur minutes at a location (any van).
+-- Only times are returned — never other customers' details.
+create or replace function public.get_available_slots(p_lat float8, p_lng float8, p_dur int, p_from date default null, p_days int default null)
+returns table (slot timestamptz) language plpgsql stable security definer set search_path = public as $$
+declare
+  st public.booking_settings;
+  d date; v record; h public.van_hours; t timestamptz; win_end timestamptz;
+  from_d date; n_days int;
+begin
+  select * into st from public.booking_settings where id = 1;
+  if p_dur is null or p_dur < 5 or p_dur > 480 then raise exception 'Invalid duration'; end if;
+  if p_lat is null or p_lng is null then raise exception 'Location required'; end if;
+  if not coalesce((public.check_service_area(p_lat, p_lng)->>'ok')::boolean, false) then return; end if;
+  from_d := greatest(coalesce(p_from, (now() at time zone st.timezone)::date), (now() at time zone st.timezone)::date);
+  n_days := least(coalesce(p_days, st.booking_window_days), st.booking_window_days);
+  for d in select generate_series(from_d, from_d + n_days - 1, interval '1 day')::date loop
+    if d > (now() at time zone st.timezone)::date + st.booking_window_days then exit; end if;
+    for v in select id from public.vans where active order by id loop
+      select * into h from public.van_hours where van_id = v.id and weekday = extract(dow from d)::int;
+      continue when not found;
+      t := (d + h.start_time) at time zone st.timezone;
+      win_end := (d + h.end_time) at time zone st.timezone;
+      while t + make_interval(mins => p_dur) <= win_end loop
+        if public.slot_is_free(v.id, t, p_dur, p_lat, p_lng) then
+          slot := t; return next;
+        end if;
+        t := t + make_interval(mins => st.slot_step_min);
+      end loop;
+    end loop;
+  end loop;
+end $$;
+
+-- Book it. Re-checks the slot inside a lock so two people can't take the same time.
+-- p = { starts_at, contact:{name,email,phone}, address:{street,city,state,zip,lat,lng,label},
+--       pets:[{pet_id? | name,species,breed,weight,coat}, service_id, addon_ids[]], notes, save_details }
+create or replace function public.book_appointment(p jsonb)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  st public.booking_settings;
+  uid uuid := auth.uid();
+  t timestamptz := (p->>'starts_at')::timestamptz;
+  v_lat float8 := (p->'address'->>'lat')::float8;
+  v_lng float8 := (p->'address'->>'lng')::float8;
+  cname text := left(trim(p->'contact'->>'name'), 120);
+  cemail text := lower(left(trim(p->'contact'->>'email'), 200));
+  cphone text := left(trim(p->'contact'->>'phone'), 40);
+  addr text := left(trim(coalesce(p->'address'->>'label', '')), 300);
+  pet jsonb; svc public.services; addon public.services;
+  cid uuid; pid uuid; vid text; bid uuid := gen_random_uuid();
+  total_dur int := 0; total_price numeric := 0; n int := 0;
+  plan jsonb := '[]'::jsonb; item jsonb;
+  cursor_t timestamptz; price numeric; dur int; label text;
+  ids uuid[] := '{}'; new_id uuid;
+begin
+  select * into st from public.booking_settings where id = 1;
+  if t is null or v_lat is null or v_lng is null then raise exception 'Please choose a time and confirm your address.'; end if;
+  if coalesce(cname, '') = '' then raise exception 'Please enter your name.'; end if;
+  if coalesce(cphone, '') = '' or length(regexp_replace(cphone, '\D', '', 'g')) < 10 then raise exception 'Please enter a phone number we can text on the day.'; end if;
+  if coalesce(cemail, '') !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Please enter a valid email.'; end if;
+  if jsonb_typeof(p->'pets') <> 'array' or jsonb_array_length(p->'pets') not between 1 and 4 then
+    raise exception 'Choose between 1 and 4 pets.';
+  end if;
+  if not coalesce((public.check_service_area(v_lat, v_lng)->>'ok')::boolean, false) then
+    raise exception 'Sorry — that address is outside our service area. Join the waitlist and we''ll let you know when we expand.';
+  end if;
+
+  -- Work out each pet's service, time and price
+  for pet in select * from jsonb_array_elements(p->'pets') loop
+    select * into svc from public.services where id = pet->>'service_id' and active and not is_addon;
+    if not found then raise exception 'Please choose a service for each pet.'; end if;
+    dur := svc.duration_min; price := svc.price; label := svc.name;
+    for addon in select * from public.services
+                where active and is_addon and id in (select jsonb_array_elements_text(coalesce(pet->'addon_ids', '[]'::jsonb))) loop
+      dur := dur + addon.duration_min; price := price + addon.price; label := label || ' + ' || addon.name;
+    end loop;
+    if n = 0 then price := price + st.trip_fee; else price := greatest(price - st.extra_pet_discount, 0); end if;
+    plan := plan || jsonb_build_object('pet', pet, 'dur', dur, 'price', price, 'label', label);
+    total_dur := total_dur + dur; total_price := total_price + price; n := n + 1;
+  end loop;
+
+  -- One booking at a time, so the availability check below can't race
+  perform pg_advisory_xact_lock(hashtext('aardvark-booking'));
+  select id into vid from public.vans
+   where active and public.slot_is_free(id, t, total_dur, v_lat, v_lng) order by id limit 1;
+  if vid is null then raise exception 'Sorry, that time was just taken. Please pick another time.'; end if;
+
+  -- Find or create the client
+  if uid is not null then
+    select id into cid from public.clients where user_id = uid;
+  end if;
+  if cid is null and uid is null then
+    -- Guests: reuse a guest record only when both email and phone match; never edit it
+    select id into cid from public.clients
+     where user_id is null and lower(email) = cemail
+       and regexp_replace(coalesce(phone, ''), '\D', '', 'g') = regexp_replace(cphone, '\D', '', 'g')
+     order by created_at desc limit 1;
+    if (select count(*) from public.appointments a join public.pets pp on pp.id = a.pet_id
+          join public.clients c on c.id = pp.client_id
+         where lower(c.email) = cemail and c.user_id is null and a.source = 'online'
+           and a.status <> 'Cancelled' and a.starts_at > now()) >= 6 then
+      raise exception 'You already have several upcoming bookings. Please create an account or call us to book more.';
+    end if;
+  end if;
+  if cid is null then
+    insert into public.clients (user_id, name, email, phone, street, city, state, zip, address, lat, lng, area)
+    values (uid, cname, cemail, cphone, p->'address'->>'street', p->'address'->>'city', p->'address'->>'state',
+            p->'address'->>'zip', addr, v_lat, v_lng, p->'address'->>'city')
+    returning id into cid;
+  elsif uid is not null and coalesce((p->>'save_details')::boolean, true) then
+    update public.clients set name = cname, phone = cphone, address = addr, lat = v_lat, lng = v_lng,
+           street = p->'address'->>'street', city = p->'address'->>'city', state = p->'address'->>'state',
+           zip = p->'address'->>'zip', area = coalesce(p->'address'->>'city', area)
+     where id = cid;
+  end if;
+
+  -- Pets + appointments, back to back at the same address
+  cursor_t := t;
+  for item in select * from jsonb_array_elements(plan) loop
+    pet := item->'pet'; pid := null;
+    if pet ? 'pet_id' and uid is not null then
+      select pp.id into pid from public.pets pp where pp.id = (pet->>'pet_id')::uuid and pp.client_id = cid;
+    end if;
+    if pid is null then
+      if coalesce(trim(pet->>'name'), '') = '' then raise exception 'Please give each pet a name.'; end if;
+      insert into public.pets (client_id, name, species, breed, weight_lbs, coat)
+      values (cid, left(trim(pet->>'name'), 60),
+              case when pet->>'species' in ('Dog', 'Cat') then pet->>'species' else 'Dog' end,
+              left(pet->>'breed', 80), nullif(pet->>'weight', '')::numeric, left(pet->>'coat', 60))
+      returning id into pid;
+    end if;
+    insert into public.appointments (pet_id, van_id, starts_at, service, price, duration_min, lat, lng,
+                                     status, booking_id, source, customer_notes, address)
+    values (pid, vid, cursor_t, item->>'label', (item->>'price')::numeric, (item->>'dur')::int, v_lat, v_lng,
+            'Confirmed', bid, 'online', left(p->>'notes', 500), addr)
+    returning id into new_id;
+    ids := ids || new_id;
+    cursor_t := cursor_t + make_interval(mins => (item->>'dur')::int);
+  end loop;
+
+  return jsonb_build_object('booking_id', bid, 'starts_at', t, 'ends_at', cursor_t,
+                            'total', total_price, 'duration_min', total_dur, 'appointments', to_jsonb(ids));
+end $$;
+
+-- Customers cancel their own booking (up to min_cancel_hours before)
+create or replace function public.cancel_my_booking(b uuid)
+returns void language plpgsql volatile security definer set search_path = public as $$
+declare st public.booking_settings; first_start timestamptz;
+begin
+  select * into st from public.booking_settings where id = 1;
+  select min(a.starts_at) into first_start
+    from public.appointments a join public.pets p on p.id = a.pet_id join public.clients c on c.id = p.client_id
+   where a.booking_id = b and c.user_id = auth.uid() and a.status <> 'Cancelled';
+  if first_start is null then raise exception 'Booking not found.'; end if;
+  if first_start < now() + make_interval(hours => st.min_cancel_hours) then
+    raise exception 'Bookings can be cancelled online up to % hours ahead. Please call or text us.', st.min_cancel_hours;
+  end if;
+  update public.appointments a set status = 'Cancelled'
+    from public.pets p, public.clients c
+   where a.booking_id = b and p.id = a.pet_id and c.id = p.client_id and c.user_id = auth.uid();
+end $$;
+
+-- ---------- Access for booking ----------
+alter table public.booking_settings enable row level security;
+alter table public.services         enable row level security;
+alter table public.van_hours        enable row level security;
+alter table public.time_off         enable row level security;
+
+grant select on public.services, public.booking_settings to anon;
+grant select, insert, update, delete on public.services, public.booking_settings, public.van_hours, public.time_off to authenticated;
+grant all on public.services, public.booking_settings, public.van_hours, public.time_off to service_role;
+grant execute on function public.gps_miles(float8, float8, float8, float8),
+                          public.travel_minutes(float8, float8, float8, float8),
+                          public.check_service_area(float8, float8),
+                          public.get_available_slots(float8, float8, int, date, int),
+                          public.book_appointment(jsonb)
+  to anon, authenticated, service_role;
+grant execute on function public.cancel_my_booking(uuid) to authenticated, service_role;
+revoke execute on function public.slot_is_free(text, timestamptz, int, float8, float8) from public, anon;
+grant execute on function public.slot_is_free(text, timestamptz, int, float8, float8) to authenticated, service_role;
+
+drop policy if exists "public reads services" on public.services;
+create policy "public reads services" on public.services for select to anon, authenticated using (active or public.is_staff());
+drop policy if exists "owner manages services" on public.services;
+create policy "owner manages services" on public.services for all to authenticated using (public.is_owner()) with check (public.is_owner());
+
+drop policy if exists "public reads booking settings" on public.booking_settings;
+create policy "public reads booking settings" on public.booking_settings for select to anon, authenticated using (true);
+drop policy if exists "owner edits booking settings" on public.booking_settings;
+create policy "owner edits booking settings" on public.booking_settings for update to authenticated using (public.is_owner()) with check (public.is_owner());
+
+do $$
+declare t text;
+begin
+  foreach t in array array['van_hours', 'time_off'] loop
+    execute format('drop policy if exists "%1$s staff read" on public.%1$I', t);
+    execute format('create policy "%1$s staff read" on public.%1$I for select to authenticated using (public.is_staff())', t);
+    execute format('drop policy if exists "%1$s owner write" on public.%1$I', t);
+    execute format('create policy "%1$s owner write" on public.%1$I for all to authenticated using (public.is_owner()) with check (public.is_owner())', t);
+  end loop;
+end $$;
+
+-- Customers see (and edit) only their own records
+drop policy if exists "customer reads own client" on public.clients;
+create policy "customer reads own client" on public.clients for select to authenticated using (user_id = auth.uid());
+drop policy if exists "customer updates own client" on public.clients;
+create policy "customer updates own client" on public.clients for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists "customer reads own pets" on public.pets;
+create policy "customer reads own pets" on public.pets for select to authenticated
+  using (exists (select 1 from public.clients c where c.id = pets.client_id and c.user_id = auth.uid()));
+drop policy if exists "customer updates own pets" on public.pets;
+create policy "customer updates own pets" on public.pets for update to authenticated
+  using (exists (select 1 from public.clients c where c.id = pets.client_id and c.user_id = auth.uid()))
+  with check (exists (select 1 from public.clients c where c.id = pets.client_id and c.user_id = auth.uid()));
+
+drop policy if exists "customer reads own appointments" on public.appointments;
+create policy "customer reads own appointments" on public.appointments for select to authenticated
+  using (exists (select 1 from public.pets p join public.clients c on c.id = p.client_id
+                  where p.id = appointments.pet_id and c.user_id = auth.uid()));

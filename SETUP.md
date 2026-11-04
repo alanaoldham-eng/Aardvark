@@ -87,6 +87,17 @@ Go to **Authentication → URL Configuration**:
 - Submit the website's waitlist form, then check **Table Editor → waitlist**.
 - To preview the app with built-in sample data at any time, add `?demo=1` to the app address.
 
+### 1g. Turn on online booking
+1. In **SQL Editor**, run the latest [`supabase/schema.sql`](supabase/schema.sql), then [`supabase/seed.sql`](supabase/seed.sql). Both are safe to re-run. This adds the service menu, Van 1's hours (Mon–Fri 8–5), and the booking rules.
+2. **Authentication → Sign In / Providers:** keep **Confirm email** **on**. Customers' accounts are linked to their earlier guest bookings by email, so the email must be verified.
+3. **Set prices:** in **Table Editor → services**, edit `price`, `duration_min` and `description`. The ones loaded are placeholders based on the strategic plan. Set `active` to false to hide a service.
+4. **Set hours:** in the app, go to **Business → Availability**. There you can set each day's hours, add time off (vacations, van service) and adjust the booking rules: setup time between stops, max stops per day, service radius, trip fee and so on.
+5. **Try it:** open https://aardvarkgroom.com/app/ on your phone while signed out and make a test booking. It appears on the staff **Today** screen for that day, marked **Online**.
+
+**How times are checked:** every address becomes GPS coordinates (customers can type it, use their phone's location, or drag the pin). A start time is only offered if the van is working, it isn't time off, the day isn't full, and there's enough time to drive from the previous stop and on to the next one. Drive time is the GPS distance × the road factor ÷ average speed, plus setup time. The database checks again at the moment of booking, so two people can't take the same slot. On the staff **Route** screen, real road directions show each drive and flag any **tight** gap.
+
+**Location services:** address search uses Photon and road routes use OSRM. Both are free OpenStreetMap services with fair-use limits, which is fine while you're small. When volume grows, switch to a paid provider (Mapbox or Google) by editing `app/geo.js` only.
+
 ### Removing the sample data later
 ```sql
 delete from public.clients where notes = 'sample';   -- also removes their pets and appointments

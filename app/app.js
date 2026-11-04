@@ -37,7 +37,10 @@
     nav: '<path d="M3 11l18-8-8 18-2-8z"/>',
     check: '<path d="M5 12l5 5 9-10"/>',
     chev: '<path d="M9 6l6 6-6 6"/>',
-    play: '<path d="M8 5v14l11-7z"/>'
+    play: '<path d="M8 5v14l11-7z"/>',
+    home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
+    book: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M12 13v5M9.5 15.5h5"/>'
   };
   function icon(n, cls) { return '<svg class="ico ' + (cls || "") + '" viewBox="0 0 24 24" aria-hidden="true">' + ICON[n] + "</svg>"; }
 
@@ -53,9 +56,14 @@
   function toast(msg) { var t = $("[data-toast]"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.remove("show"); }, 2200); }
 
   /* ---------- navigation chrome ---------- */
-  var TABS = [["today", "Today"], ["route", "Route"], ["pets", "Clients"], ["academy", "Academy"], ["more", "Business"]];
-  $("[data-tabs]").innerHTML = TABS.map(function (t) { return '<a href="#' + t[0] + '" data-tab="' + t[0] + '">' + icon(t[0]) + "<span>" + t[1] + "</span></a>"; }).join("");
-  $("[data-nav]").innerHTML = TABS.map(function (t) { return '<a href="#' + t[0] + '" data-tab="' + t[0] + '">' + icon(t[0]) + "<span>" + (t[0] === "today" ? "Dashboard" : t[0] === "route" ? "Dispatch" : t[0] === "more" ? "Reports" : t[1]) + "</span></a>"; }).join("");
+  var STAFF_TABS = [["today", "Today", "today", "Dashboard"], ["route", "Route", "route", "Dispatch"], ["pets", "Clients", "pets", "Clients"], ["academy", "Academy", "academy", "Academy"], ["more", "Business", "more", "Reports"]];
+  var CUSTOMER_TABS = [["home", "Home", "home", "Home"], ["book", "Book", "book", "Book a groom"], ["mypets", "My pets", "pets", "My pets"], ["account", "Account", "user", "Account"]];
+  var MODE = "staff"; // "public" (not signed in) | "customer" | "staff"
+  function setTabs(list) {
+    $("[data-tabs]").innerHTML = list.map(function (t) { return '<a href="#' + t[0] + '" data-tab="' + t[0] + '">' + icon(t[2]) + "<span>" + t[1] + "</span></a>"; }).join("");
+    $("[data-nav]").innerHTML = list.map(function (t) { return '<a href="#' + t[0] + '" data-tab="' + t[0] + '">' + icon(t[2]) + "<span>" + t[3] + "</span></a>"; }).join("");
+  }
+  setTabs(STAFF_TABS);
 
   var view = $("[data-view]");
   var activeMap = null;
@@ -73,7 +81,7 @@
     var p = petById(a.petId);
     return '<a class="appt" href="#appt/' + a.id + '">' +
       '<span class="appt-time">' + fmtTime(a.time) + "</span>" + avatar(p) +
-      '<span class="appt-body"><b>' + esc(p.name) + "</b><small>" + esc(p.breed) + "</small><small>" + esc(a.service) + "</small></span>" +
+      '<span class="appt-body"><b>' + esc(p.name) + (a.online ? ' <span class="chip chip-online">Online</span>' : "") + "</b><small>" + esc(p.breed) + "</small><small>" + esc(a.service) + "</small></span>" +
       statusChip(status(a)) + icon("chev", "chev") + "</a>";
   }
 
@@ -135,8 +143,8 @@
       L.marker([a.lat, a.lng], { icon: L.divIcon({ className: "pin" + (done ? " done" : ""), html: "<b>" + (i + 1) + "</b>", iconSize: [30, 30] }) })
         .addTo(map).bindPopup("<b>" + esc(p.name) + "</b><br>" + fmtTime(a.time) + " · " + esc(a.service) + '<br><a href="#appt/' + a.id + '">Open stop</a>');
     });
-    L.polyline(latlngs, { color: "#0f4a3c", weight: 4, opacity: .85, dashArray: "1 8", lineCap: "round" }).addTo(map);
-    L.polyline(latlngs, { color: "#0f4a3c", weight: 3, opacity: .55 }).addTo(map);
+    map._straight = [L.polyline(latlngs, { color: "#0f4a3c", weight: 4, opacity: .85, dashArray: "1 8", lineCap: "round" }).addTo(map),
+                     L.polyline(latlngs, { color: "#0f4a3c", weight: 3, opacity: .55 }).addTo(map)];
     if (latlngs.length) map.fitBounds(latlngs, { padding: [28, 28] }); else map.setView([30.6954, -88.0399], 12);
     setTimeout(function () { map.invalidateSize(); }, 50);
   }
@@ -163,6 +171,122 @@
       (remaining.length ? '<a class="btn full" target="_blank" rel="noopener" href="' + directionsUrl(remaining) + '">' + icon("nav") + " Start navigation</a>" : '<p class="muted center">Route complete — nice work!</p>') +
       "</section></div>";
     drawMap("route-map", false);
+    roadLegs();
+  }
+
+  function minsOfDay(t) { return +t.slice(0, 2) * 60 + +t.slice(3, 5); }
+  // Real driving times between stops (OpenStreetMap routing); warn where the gap is too short
+  function roadLegs() {
+    if (!window.Geo) return;
+    var stops = D.appointments.filter(function (a) { return a.mappable !== false && a.lat != null; });
+    var depot = D.van.depot && D.van.depot.lat != null ? [D.van.depot] : [];
+    var pts = depot.concat(stops);
+    var mapAtStart = activeMap;
+    Geo.route(pts).then(function (r) {
+      if (!r || activeMap !== mapAtStart || !document.getElementById("route-map")) return;
+      if (activeMap) {
+        (activeMap._straight || []).forEach(function (l) { activeMap.removeLayer(l); });
+        L.polyline(r.line, { color: "#0f4a3c", weight: 5, opacity: .8 }).addTo(activeMap);
+      }
+      var tight = 0;
+      stops.forEach(function (a, i) {
+        // With a depot the first leg is base → stop 1; without one, stop 1 has no incoming leg
+        var leg = depot.length ? r.legs[i] : (i > 0 ? r.legs[i - 1] : null);
+        var li = document.querySelector('.stops a[href="#appt/' + a.id + '"]');
+        if (!li || !leg) return;
+        var prev = i > 0 ? stops[i - 1] : null;
+        var gap = prev ? minsOfDay(a.time) - (minsOfDay(prev.time) + prev.mins) : null;
+        var isTight = gap != null && leg.minutes > gap; // not enough time to drive between the two jobs
+        if (isTight) tight++;
+        var d = li.querySelector(".d"); if (d) d.textContent = leg.minutes + " min";
+        var note = document.createElement("span");
+        note.className = "leg" + (isTight ? " tight" : "");
+        note.textContent = (isTight ? "⚠ Tight: " : "") + leg.minutes + " min · " + leg.miles + " mi by road" + (gap != null ? " · " + gap + " min gap" : " from base");
+        li.parentNode.appendChild(note);
+      });
+      var h = document.querySelector(".route-layout .card-head h2");
+      if (h) h.textContent = stops.length + " stops · " + r.minutes + " min · " + r.miles + " mi by road";
+      if (tight) toast(tight + " stop" + (tight > 1 ? "s are" : " is") + " tight on drive time today.");
+    });
+  }
+
+  /* ---------- owner: availability ---------- */
+  var DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  function zoned(dateStr, timeStr, tz) {
+    // Local date + time in the business time zone → Date
+    var guess = new Date(dateStr + "T" + timeStr + ":00Z");
+    var parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(guess);
+    var g = {}; parts.forEach(function (x) { g[x.type] = x.value; });
+    var asLocal = Date.UTC(+g.year, +g.month - 1, +g.day, +g.hour, +g.minute);
+    return new Date(guess.getTime() - (asLocal - guess.getTime()));
+  }
+  function viewAvailability() {
+    setHeader("Availability", "When customers can book online", "more", "more");
+    if (Api.mode !== "live") { view.innerHTML = '<section class="card"><p class="muted">Availability settings are available once the app is connected to the database.</p></section>'; return; }
+    if (!Api.staff || Api.staff.role !== "owner") { view.innerHTML = '<section class="card"><p class="muted">Only owners can change availability.</p></section>'; return; }
+    view.innerHTML = '<p class="muted pad center">Loading…</p>';
+    var van;
+    Promise.all([Api.vans(), Api.settings()]).then(function (r) {
+      van = r[0][0]; var st = r[1];
+      if (!van) throw new Error("No vans yet. Add one in Supabase → Table Editor → vans.");
+      return Promise.all([Api.vanHours(van.id), Api.timeOff(van.id)]).then(function (x) { render(x[0], x[1], st); });
+    }).catch(showError);
+
+    function fmtTO(d) { return new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(d)); }
+    function render(hours, off, st) {
+      var byDay = {}; hours.forEach(function (h) { byDay[h.weekday] = h; });
+      var rules = [["slot_step_min", "Offer a start time every (min)"], ["buffer_min", "Setup time between stops (min)"], ["max_stops_per_day", "Max stops per day"],
+                   ["service_radius_miles", "Service radius (miles)"], ["lead_time_hours", "Earliest booking (hours ahead)"], ["booking_window_days", "Book up to (days ahead)"],
+                   ["trip_fee", "Trip fee ($)"], ["extra_pet_discount", "Extra-pet discount ($)"], ["min_cancel_hours", "Online cancel cutoff (hours)"],
+                   ["avg_speed_mph", "Average driving speed (mph)"], ["road_factor", "Road distance factor"]];
+      view.innerHTML =
+        '<section class="card"><div class="card-head"><h2>Working hours · ' + esc(van.name) + '</h2></div><div data-hours>' +
+        DAYS.map(function (n, d) {
+          var h = byDay[d];
+          return '<div class="hours-row" data-day="' + d + '"><label><input type="checkbox"' + (h ? " checked" : "") + "> " + n.slice(0, 3) + "</label>" +
+            '<input type="time" data-start value="' + (h ? h.start_time.slice(0, 5) : "08:00") + '"' + (h ? "" : " disabled") + ">" +
+            '<input type="time" data-end value="' + (h ? h.end_time.slice(0, 5) : "17:00") + '"' + (h ? "" : " disabled") + "></div>";
+        }).join("") + '</div><button class="btn full" data-save-hours>Save hours</button></section>' +
+        '<section class="card"><div class="card-head"><h2>Time off</h2></div>' +
+        (off.length ? off.map(function (o) { return '<div class="off-row"><div><b>' + fmtTO(o.starts_at) + " – " + fmtTO(o.ends_at) + "</b><small>" + esc(o.reason || "") + '</small></div><button class="pill ghost" data-del="' + o.id + '">Remove</button></div>'; }).join("") : '<p class="muted">No time off booked.</p>') +
+        '<form class="off-form" data-off><label>From<input type="date" name="d1" required></label><label>To<input type="date" name="d2" required></label>' +
+        '<label>Start time<input type="time" name="t1" value="00:00"></label><label>End time<input type="time" name="t2" value="23:59"></label>' +
+        '<label class="wide">Reason (staff only)<input name="reason" maxlength="100" placeholder="e.g. Van service, vacation"></label>' +
+        '<button class="btn ghost full wide" type="submit">Add time off</button></form></section>' +
+        '<section class="card"><div class="card-head"><h2>Booking rules</h2></div><form class="rules" data-rules>' +
+        rules.map(function (r) { return "<label>" + r[1] + '<input name="' + r[0] + '" type="number" step="any" min="0" value="' + (st[r[0]] != null ? Number(st[r[0]]) : "") + '"></label>'; }).join("") +
+        '</form><p class="muted small">Drive time between stops is estimated from GPS distance × road factor ÷ speed, plus setup time. Customers only see times that fit.</p>' +
+        '<button class="btn full" data-save-rules>Save rules</button></section>';
+
+      document.querySelectorAll(".hours-row input[type=checkbox]").forEach(function (cb) {
+        cb.onchange = function () { cb.closest(".hours-row").querySelectorAll("input[type=time]").forEach(function (t) { t.disabled = !cb.checked; }); };
+      });
+      $("[data-save-hours]").onclick = function () {
+        var rows = [], bad = "";
+        document.querySelectorAll(".hours-row").forEach(function (r) {
+          var on = r.querySelector("input[type=checkbox]").checked, s1 = r.querySelector("[data-start]").value, e1 = r.querySelector("[data-end]").value;
+          if (on && (!s1 || !e1 || e1 <= s1)) bad = DAYS[+r.dataset.day] + ": the end time must be after the start time.";
+          rows.push(on ? { weekday: +r.dataset.day, start_time: s1, end_time: e1 } : { weekday: +r.dataset.day, off: true });
+        });
+        if (bad) return toast(bad);
+        Api.saveVanHours(van.id, rows).then(function () { toast("Hours saved. Online booking updates right away."); }).catch(fail);
+      };
+      document.querySelectorAll("[data-del]").forEach(function (b) {
+        b.onclick = function () { Api.deleteTimeOff(b.dataset.del).then(function () { toast("Removed."); viewAvailability(); }).catch(fail); };
+      });
+      $("[data-off]").onsubmit = function (e) {
+        e.preventDefault(); var f = e.target;
+        var a = zoned(f.d1.value, f.t1.value || "00:00", "America/Chicago"), b2 = zoned(f.d2.value, f.t2.value || "23:59", "America/Chicago");
+        if (!(b2 > a)) return toast("The end must be after the start.");
+        Api.addTimeOff({ van_id: van.id, starts_at: a.toISOString(), ends_at: b2.toISOString(), reason: f.reason.value.trim() || null })
+          .then(function () { toast("Time off added. Those times are now hidden from customers."); viewAvailability(); }).catch(fail);
+      };
+      $("[data-save-rules]").onclick = function () {
+        var patch = {};
+        rules.forEach(function (r) { var v = $('[data-rules] [name="' + r[0] + '"]').value; if (v !== "") patch[r[0]] = Number(v); });
+        Api.saveSettings(patch).then(function () { toast("Booking rules saved."); }).catch(fail);
+      };
+    }
   }
 
   function viewAppt(id) {
@@ -281,13 +405,14 @@
       '<section class="card"><h2>Unit economics</h2><dl class="facts"><dt>Average ticket</dt><dd>' + money(avg) + "</dd><dt>Rebook rate</dt><dd>" + W.rebookRate + "%</dd><dt>Grooms / day</dt><dd>" + (W.bookings / 5).toFixed(1) + "</dd><dt>Drive time today</dt><dd>" + D.appointments.reduce(function (s, a) { return s + a.drive; }, 0) + " min</dd></dl></section></div>" +
       (MOBILE && !standalone ? '<section class="card"><h2>Get the app</h2><p class="muted">On iPhone: open this page in Safari, tap Share, then <b>Add to Home Screen</b>. On Android: tap <b>Install app</b> in Chrome\'s menu.</p><button class="btn ghost" data-install-again>Install Aardvark</button></section>' : "") +
       (Api.mode === "live" && Api.staff.role === "owner"
-        ? '<a class="card team-link" href="#team"><span><b>Team</b><small class="muted">Approve new staff, set roles</small></span>' + icon("chev", "chev") + "</a>" : "") +
+        ? '<a class="card team-link" href="#availability"><span><b>Availability</b><small class="muted">Working hours, time off, booking rules</small></span>' + icon("chev", "chev") + "</a>" +
+          '<a class="card team-link" href="#team"><span><b>Team</b><small class="muted">Approve new staff, set roles</small></span>' + icon("chev", "chev") + "</a>" : "") +
       (Api.mode === "live"
         ? '<section class="card"><h2>Account</h2><dl class="facts"><dt>Signed in</dt><dd>' + esc(Api.user.email || "") + "</dd><dt>Role</dt><dd>" + esc(Api.staff.role) + '</dd></dl><button class="btn ghost full" data-signout>Sign out</button></section>'
         : '<p class="muted center small">Demo mode · sample data · <a href="../">Aardvark website</a></p>');
     var ia = $("[data-install-again]"); if (ia) ia.onclick = promptInstall;
     var so = $("[data-signout]");
-    if (so) so.onclick = function () { Api.signOut().then(function () { D = null; showLogin(); }); };
+    if (so) so.onclick = function () { Api.signOut().then(function () { location.hash = "#welcome"; toPublic(); }); };
   }
 
   var ROLES = [["owner", "Owner"], ["groomer", "Groomer"], ["student", "Academy student"]];
@@ -328,8 +453,16 @@
   }
 
   /* ---------- router ---------- */
+  var PUBLIC_ROUTES = ["welcome", "book", "join", "signin", "staffjoin", "home", "mypets", "account"];
   function route() {
-    var h = (location.hash || "#today").slice(1).split("/");
+    var h = (location.hash || "").slice(1).split("/");
+    if (MODE !== "staff") {
+      if (activeMap) { activeMap.remove(); activeMap = null; }
+      if (MODE === "public") Book.routePublic(h); else Book.routeCustomer(h);
+      window.scrollTo(0, 0);
+      return;
+    }
+    if (!h[0] || PUBLIC_ROUTES.indexOf(h[0]) > -1) h = ["today"];
     if (activeMap && !(h[0] === "today" || h[0] === "route")) { activeMap.remove(); activeMap = null; }
     switch (h[0]) {
       case "route": viewRoute(); break;
@@ -340,12 +473,13 @@
       case "course": viewCourse(h[1]); break;
       case "more": viewMore(); break;
       case "team": viewTeam(); break;
+      case "availability": viewAvailability(); break;
       default: viewToday();
     }
     view.scrollTop = 0; window.scrollTo(0, 0);
   }
   var lastWide = isWide();
-  window.addEventListener("resize", function () { if (D && isWide() !== lastWide) { lastWide = isWide(); route(); } });
+  window.addEventListener("resize", function () { if (MODE === "staff" && D && isWide() !== lastWide) { lastWide = isWide(); route(); } });
 
   /* ---------- sign-in + boot ---------- */
   function chrome(on) { document.body.classList.toggle("signed-out", !on); }
@@ -353,23 +487,25 @@
   function showLogin(msg) {
     chrome(false);
     if (activeMap) { activeMap.remove(); activeMap = null; }
-    setHeader("Sign in", "Aardvark staff", null, "");
+    setHeader("Sign in", "Customers and staff", "welcome", "");
     view.innerHTML = '<section class="card login"><img src="../assets/mark.png" alt="" width="72" height="72">' +
-      '<h2>Welcome back</h2><p class="muted">Sign in with the email your Aardvark owner set up for you.</p>' +
+      '<h2>Welcome back</h2><p class="muted">Sign in to book faster and manage your visits.</p>' +
       '<form data-login><label>Email<input type="email" name="email" required autocomplete="username"></label>' +
       '<label>Password<input type="password" name="password" autocomplete="current-password"></label>' +
       '<button class="btn full" type="submit">Sign in</button>' +
       '<button class="btn ghost full" type="button" data-link>Email me a sign-in link</button>' +
       '<p class="form-msg" role="status">' + esc(msg || "") + "</p></form>" +
       '<div class="login-links"><button type="button" class="linkish" data-forgot>Forgot password?</button>' +
-      '<button type="button" class="linkish" data-signup>New to the team? Create a staff account</button></div></section>';
+      '<a class="linkish" href="#join">New customer? Create an account</a>' +
+      '<a class="linkish" href="#book">Book without an account</a>' +
+      '<button type="button" class="linkish subtle" data-signup>Work at Aardvark? Create a staff account</button></div></section>';
     var f = $("[data-login]"), out = f.querySelector(".form-msg");
     f.onsubmit = function (e) {
       e.preventDefault();
       var email = f.email.value.trim(), pw = f.password.value;
       if (!pw) { out.textContent = "Enter your password, or use the email link."; return; }
       out.textContent = "Signing in…";
-      Api.signIn(email, pw).then(function () { history.replaceState(null, "", location.pathname + location.search + "#today"); return start(); })
+      Api.signIn(email, pw).then(function () { return start(); })
         .catch(function (err) { out.textContent = err.message || "Sign-in failed."; });
     };
     $("[data-link]").onclick = function () {
@@ -408,7 +544,7 @@
       "Create account",
       '<div class="login-links"><button type="button" class="linkish" data-back-login>Already have an account? Sign in</button></div>');
     var f = $("[data-auth]"), out = f.querySelector(".form-msg");
-    $("[data-back-login]").onclick = function () { showLogin(); };
+    $("[data-back-login]").onclick = function () { location.hash = "#signin"; showLogin(); };
     f.onsubmit = function (e) {
       e.preventDefault();
       if (!f.checkValidity()) { f.reportValidity(); return; }
@@ -447,22 +583,41 @@
     view.innerHTML = '<section class="card"><p>' + esc(err && err.message ? err.message : String(err)) + '</p><button class="btn full" data-retry>Try again</button>' +
       (Api.mode === "live" ? '<button class="btn ghost full" data-out>Sign out</button>' : "") + "</section>";
     $("[data-retry]").onclick = start;
-    var o = $("[data-out]"); if (o) o.onclick = function () { Api.signOut().then(function () { showLogin(); }); };
+    var o = $("[data-out]"); if (o) o.onclick = function () { Api.signOut().then(function () { location.hash = "#welcome"; toPublic(); }); };
   }
 
   function start() {
+    document.body.classList.remove("public-landing");
     view.innerHTML = '<p class="muted pad center">Loading…</p>';
     return Api.load().then(function (data) {
-      D = data; chrome(true);
       document.documentElement.classList.toggle("demo", Api.mode === "demo");
+      var h = (location.hash || "").slice(1).split("/")[0];
+      if (Api.kind === "customer") {
+        MODE = "customer"; D = null; setTabs(CUSTOMER_TABS); chrome(true);
+        if (["home", "book", "mypets", "account"].indexOf(h) < 0) history.replaceState(null, "", location.pathname + location.search + (Book.hasDraft() ? "#book" : "#home"));
+      } else {
+        MODE = "staff"; D = data; setTabs(STAFF_TABS); chrome(true);
+        if (!h || PUBLIC_ROUTES.indexOf(h) > -1) history.replaceState(null, "", location.pathname + location.search + "#today");
+      }
       route();
     }).catch(showError);
   }
 
-  Api.onSignedOut = function () { D = null; showLogin(); };
+  function toPublic() {
+    MODE = "public"; D = null; setTabs([]);
+    var h = (location.hash || "").slice(1).split("/")[0];
+    if (["welcome", "book", "join", "signin", "staffjoin"].indexOf(h) < 0) history.replaceState(null, "", location.pathname + location.search + "#welcome");
+    route();
+  }
+
+  window.AppUI = { $: $, esc: esc, view: view, icon: icon, avatar: avatar, toast: toast, setHeader: setHeader, chrome: chrome,
+                   showError: showError, showLogin: showLogin, showSignup: showSignup, start: start, toPublic: toPublic };
+  Book.init(window.AppUI);
+
+  Api.onSignedOut = function () { toPublic(); };
   Api.onRecovery = function () { D = null; showSetPassword(); };
-  window.addEventListener("hashchange", function () { if (D) route(); });
-  Api.init().then(function (r) { r.recovery ? showSetPassword() : r.needsLogin ? showLogin() : start(); }).catch(showError);
+  window.addEventListener("hashchange", function () { if (MODE !== "staff" || D) route(); });
+  Api.init().then(function (r) { r.recovery ? showSetPassword() : r.needsLogin ? toPublic() : start(); }).catch(showError);
 
   /* ---------- install + offline ---------- */
   var deferred = null, banner = $("[data-install]");

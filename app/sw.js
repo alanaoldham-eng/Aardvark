@@ -1,8 +1,8 @@
 // Aardvark service worker: keeps the app shell available offline.
 // Bump VERSION whenever app files change so phones pick up the new build.
-var VERSION = "aardvark-v5";
+var VERSION = "aardvark-v6";
 var SHELL = [
-  "./", "./index.html", "./app.css", "./app.js", "./api.js", "./data.js", "./manifest.webmanifest",
+  "./", "./index.html", "./app.css", "./book.css", "./app.js", "./api.js", "./geo.js", "./book.js", "./data.js", "./manifest.webmanifest",
   "../config.js", "../vendor/supabase/supabase.js",
   "../vendor/leaflet/leaflet.js", "../vendor/leaflet/leaflet.css",
   "../assets/mark.png", "../assets/icon-192.png", "../assets/icon-512.png", "../assets/favicon.png"

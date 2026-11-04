@@ -13,6 +13,10 @@ No build step and no frameworks: plain HTML, CSS and JavaScript, so the site run
 
 ## The app (`/app/`)
 
+**Customers (public):** a landing page with services and prices, and online booking: address with GPS → pets and services → only times the van can really reach → confirm. Guests can book; an account saves the address and pets for 3-tap rebooking, and lets customers see and cancel upcoming visits.
+
+**Staff (sign in):**
+
 - **Today:** the day's schedule with status (Confirmed → On the way → In progress → Done). On wide screens it becomes the dashboard: schedule, route map, business performance and the next pet's record.
 - **Route:** van dispatch map with numbered stops and drive times. *Start navigation* opens Google Maps with every remaining stop in order.
 - **Appointment:** call the owner, text "on my way", navigate, and step through the groom. Finishing a groom sets the rebook date from the pet's cadence.
@@ -42,6 +46,8 @@ python3 -m http.server 8000
 ## Project layout
 ```
 config.js            ← Supabase URL + publishable key (the only settings file)
+app/book.js          ← public landing, booking flow, customer portal
+app/geo.js           ← address search, GPS, distances, road routes (swap providers here)
 index.html site.*    ← marketing website (+ waitlist form → Supabase)
 app/                 ← installable app: api.js (data layer), app.js (screens), sw.js (offline)
 supabase/schema.sql  ← tables, security rules, automatic rebooking

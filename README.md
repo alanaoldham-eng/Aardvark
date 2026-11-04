@@ -20,7 +20,11 @@ No build step and no frameworks: plain HTML, CSS and JavaScript, so the site run
 - **Academy:** the 10-week program, with course progress and module checklists.
 - **Business:** bookings, revenue trend, average ticket, rebook rate.
 
-All of it runs on **sample data** in `app/data.js`. Statuses and Academy progress are saved in the browser on each device. There is no server yet.
+**Two modes, picked automatically:**
+- **Demo mode** is used when `config.js` is empty, or when the address ends with `?demo=1`. The app runs on the sample data in `app/data.js`, and changes are saved on that device only. The previews on the website always use demo mode.
+- **Live mode** is used once `config.js` has your Supabase details. Staff sign in, and everything reads from and saves to the Supabase database: schedule, statuses, clients, Academy progress and the website waitlist.
+
+**👉 To connect the database and go live, follow [SETUP.md](SETUP.md).**
 
 ### Installing on a phone
 The QR code on the website always points at `<this site>/app/`, so it keeps working when the domain changes.
@@ -35,22 +39,26 @@ python3 -m http.server 8000
 # open http://localhost:8000  (site)  and  http://localhost:8000/app/  (app)
 ```
 
-## Deploying
-`.github/workflows/pages.yml` publishes the repo to GitHub Pages on every push to `main`:
-`https://alanaoldham-eng.github.io/Aardvark/`
+## Project layout
+```
+config.js            ← Supabase URL + publishable key (the only settings file)
+index.html site.*    ← marketing website (+ waitlist form → Supabase)
+app/                 ← installable app: api.js (data layer), app.js (screens), sw.js (offline)
+supabase/schema.sql  ← tables, security rules, automatic rebooking
+supabase/seed.sql    ← sample data
+_headers             ← caching rules for Cloudflare Pages / Netlify
+```
 
-**Custom domain (aardvarkgroom.com):** in GitHub → Settings → Pages, set the custom domain. Then at Porkbun add these DNS records:
-- `A` records for `@` → 185.199.108.153, 185.199.109.153, 185.199.110.153, 185.199.111.153
-- `CNAME` for `www` → `alanaoldham-eng.github.io`
-
-## Wiring up the waitlist
-The waitlist form collects the Phase 0 data: ZIP code, breed, weight and coat condition. To start receiving sign-ups, create a free form endpoint (for example Formspree) and paste its URL into `WAITLIST_ENDPOINT` at the top of `site.js`. Until then the form runs in preview mode and says so.
+## Hosting
+GitHub Pages hosts the site for now (`.github/workflows/pages.yml` deploys every push to `main`). Moving to Cloudflare Pages at go-live needs no code changes; see [SETUP.md](SETUP.md#3-go-live-move-hosting-to-cloudflare-pages).
 
 ## Next steps
-- A backend for real bookings, clients and logins (Supabase or Firebase are good fits)
-- Academy video hosting
+- Screens for adding clients, pets and appointments (for now, add these in Supabase's Table Editor)
+- Online booking for pet owners
+- Academy video hosting: put a link in `course_modules.video_url`
 - Native App Store / Google Play builds, if wanted later. Wrapping this app with Capacitor reuses the same code.
 
 ## Third-party code
 - `vendor/leaflet/`: Leaflet 1.9.4 (BSD-2-Clause). Map data © OpenStreetMap contributors.
 - `vendor/qrcode.js`: qrcode-generator 1.4.4 by Kazuhiko Arase (MIT)
+- `vendor/supabase/`: supabase-js 2.119.0 (MIT)

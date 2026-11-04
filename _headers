@@ -1,0 +1,16 @@
+# Used by Cloudflare Pages and Netlify (ignored by GitHub Pages).
+# Always re-check these files so app updates and config changes reach phones immediately.
+/app/sw.js
+  Cache-Control: no-cache
+/config.js
+  Cache-Control: no-cache
+/app/manifest.webmanifest
+  Cache-Control: no-cache
+
+# Keep the database scripts out of search engines
+/supabase/*
+  X-Robots-Tag: noindex
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

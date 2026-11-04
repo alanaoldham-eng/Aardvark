@@ -1,24 +1,14 @@
 /* Aardvark groomer app — installable web app prototype (no build step). */
 (function () {
   "use strict";
-  var D = window.AARDVARK_DATA;
+  var D = null; // filled by Api.load()
   var params = new URLSearchParams(location.search);
   var EMBED = params.get("embed") === "1";
   if (EMBED) document.documentElement.classList.add("embed");
-
-  /* ---------- storage (best effort) ---------- */
   var store = {
     get: function (k, d) { try { var v = localStorage.getItem("aardvark:" + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
     set: function (k, v) { if (EMBED) return; try { localStorage.setItem("aardvark:" + k, JSON.stringify(v)); } catch (e) {} }
   };
-  var statusOf = EMBED ? {} : store.get("status", {});
-  var progress = EMBED ? {} : store.get("progress", {});
-  D.courses.forEach(function (c) {
-    c.modules = c.modules.map(function (m, i) {
-      var key = c.id + ":" + i;
-      return { title: m[0], done: key in progress ? progress[key] : m[1], key: key };
-    });
-  });
 
   /* ---------- helpers ---------- */
   var $ = function (s, r) { return (r || document).querySelector(s); };
@@ -33,8 +23,8 @@
   function shortDate(d) { return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
 
   var STATUSES = ["Confirmed", "On the way", "In progress", "Done"];
-  function status(a) { return statusOf[a.id] || "Confirmed"; }
-  function setStatus(a, s) { statusOf[a.id] = s; store.set("status", statusOf); }
+  function status(a) { return a.status || "Confirmed"; }
+  function fail(err) { console.error(err); toast("Couldn't save — " + (err && err.message ? err.message : "check your connection")); }
 
   var ICON = {
     today: '<path d="M4 6h16v14H4zM4 10h16M9 3v4M15 3v4"/>',
@@ -54,7 +44,7 @@
   var PALETTE = { "dog-golden": "#d9a35b", "dog-poodle": "#c9a27e", cat: "#8a8f99", "dog-aussie": "#5b6a7d", "dog-shihtzu": "#c7a98f", "dog-doodle": "#d8b48a", "dog-schnauzer": "#7d7f80" };
   function avatar(p, size) {
     size = size || 44;
-    return '<span class="avatar" style="--s:' + size + 'px;--c:' + (PALETTE[p.photo] || "#a99") + '">' +
+    return '<span class="avatar" style="--s:' + size + 'px;--c:' + (p.color || PALETTE[p.photo] || "#a99") + '">' +
       '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="8.5" r="1.9"/><circle cx="12" cy="6" r="1.9"/><circle cx="17" cy="8.5" r="1.9"/><path d="M7.6 16.6c0-2.8 2-5.1 4.4-5.1s4.4 2.3 4.4 5.1c0 1.7-1.5 2.3-4.4 2.3s-4.4-.6-4.4-2.3z"/></svg>' +
       "<b>" + esc(p.name[0]) + "</b></span>";
   }
@@ -95,7 +85,7 @@
     var schedule = '<section class="card">' +
       '<div class="seg"><button class="on">Schedule</button><button data-week>Week</button></div>' +
       '<div class="day-summary"><div><b>' + D.appointments.length + "</b><small>stops</small></div><div><b>" + done + "</b><small>done</small></div><div><b>" + money(total) + "</b><small>booked</small></div></div>" +
-      '<div class="list">' + D.appointments.map(apptRow).join("") + "</div></section>";
+      '<div class="list">' + (D.appointments.length ? D.appointments.map(apptRow).join("") : '<p class="muted pad center">No stops scheduled today.</p>') + "</div></section>";
 
     if (!isWide()) { view.innerHTML = schedule; bindWeek(); return; }
 
@@ -118,25 +108,28 @@
     if (w) w.onclick = function () { toast("Week calendar is coming in the next build."); };
   }
 
+  function delta(n) { return n ? '<em class="' + (n < 0 ? "down" : "") + '">' + (n < 0 ? "↓ " : "↑ ") + Math.abs(n) + "%</em>" : ""; }
   function perfCard() {
     var W = D.weekly, t = W.trend, max = Math.max.apply(null, t), min = Math.min.apply(null, t);
     var pts = t.map(function (v, i) { return (i * (200 / (t.length - 1))).toFixed(1) + "," + (52 - ((v - min) / (max - min)) * 44).toFixed(1); }).join(" ");
     return '<section class="card perf"><h2>Business Performance</h2><div class="perf-row">' +
-      "<div><small>Bookings</small><b>" + W.bookings + '</b><em>↑ ' + W.bookingsDelta + "%</em></div>" +
-      "<div><small>Revenue</small><b>" + money(W.revenue) + '</b><em>↑ ' + W.revenueDelta + "%</em></div></div>" +
-      '<svg viewBox="0 0 200 56" class="spark" preserveAspectRatio="none"><polyline points="' + pts + '"/></svg><small class="muted">This week vs. last · last 8 weeks</small></section>';
+      "<div><small>Bookings</small><b>" + W.bookings + "</b>" + delta(W.bookingsDelta) + "</div>" +
+      "<div><small>Revenue</small><b>" + money(W.revenue) + "</b>" + delta(W.revenueDelta) + "</div></div>" +
+      '<svg viewBox="0 0 200 56" class="spark" preserveAspectRatio="none"><polyline points="' + pts + '"/></svg><small class="muted">This week so far vs. last week · revenue, last 8 weeks</small></section>';
   }
 
   function drawMap(id, compact) {
     if (activeMap) { activeMap.remove(); activeMap = null; }
     var el = document.getElementById(id);
+    var depotOk = D.van.depot && D.van.depot.lat != null;
     if (!el || !window.L) { if (el) el.innerHTML = '<p class="muted pad">Map unavailable offline.</p>'; return; }
     var map = L.map(el, { zoomControl: !compact, attributionControl: true, scrollWheelZoom: !compact, dragging: !EMBED, tap: false });
     activeMap = map;
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(map);
-    var latlngs = [[D.van.depot.lat, D.van.depot.lng]];
-    L.marker([D.van.depot.lat, D.van.depot.lng], { icon: L.divIcon({ className: "pin depot", html: icon("route"), iconSize: [30, 30] }) }).addTo(map);
+    var latlngs = depotOk ? [[D.van.depot.lat, D.van.depot.lng]] : [];
+    if (depotOk) L.marker([D.van.depot.lat, D.van.depot.lng], { icon: L.divIcon({ className: "pin depot", html: icon("route"), iconSize: [30, 30] }) }).addTo(map);
     D.appointments.forEach(function (a, i) {
+      if (a.mappable === false) return;
       var p = petById(a.petId), done = status(a) === "Done";
       latlngs.push([a.lat, a.lng]);
       L.marker([a.lat, a.lng], { icon: L.divIcon({ className: "pin" + (done ? " done" : ""), html: "<b>" + (i + 1) + "</b>", iconSize: [30, 30] }) })
@@ -144,12 +137,14 @@
     });
     L.polyline(latlngs, { color: "#0f4a3c", weight: 4, opacity: .85, dashArray: "1 8", lineCap: "round" }).addTo(map);
     L.polyline(latlngs, { color: "#0f4a3c", weight: 3, opacity: .55 }).addTo(map);
-    map.fitBounds(latlngs, { padding: [28, 28] });
+    if (latlngs.length) map.fitBounds(latlngs, { padding: [28, 28] }); else map.setView([30.6954, -88.0399], 12);
     setTimeout(function () { map.invalidateSize(); }, 50);
   }
 
   function directionsUrl(stops) {
-    var o = D.van.depot, last = stops[stops.length - 1];
+    stops = stops.filter(function (a) { return a.mappable !== false; });
+    if (!stops.length) return "#route";
+    var o = D.van.depot && D.van.depot.lat != null ? D.van.depot : stops[0], last = stops[stops.length - 1];
     var wp = stops.slice(0, -1).map(function (a) { return a.lat + "," + a.lng; }).join("|");
     return "https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=" + o.lat + "," + o.lng +
       "&destination=" + last.lat + "," + last.lng + (wp ? "&waypoints=" + encodeURIComponent(wp) : "");
@@ -188,9 +183,15 @@
       '<a href="#pet/' + p.id + '" class="link">Full pet record ›</a></section>';
     var adv = $("[data-advance]");
     if (adv) adv.onclick = function () {
-      setStatus(a, nextS);
-      if (nextS === "Done") toast(p.name + " is done! Rebook set for " + shortDate(daysFromNow(p.cadenceWeeks * 7)) + ".");
-      viewAppt(id);
+      adv.disabled = true;
+      Api.setStatus(a, nextS).then(function () {
+        if (nextS === "Done") {
+          p.lastGroom = 0;
+          toast(p.name + " is done! " + (Api.mode === "live" ? "Next groom booked for " : "Rebook due ") + shortDate(daysFromNow(p.cadenceWeeks * 7)) + ".");
+          if (Api.mode === "live") { p.hasNext = true; p.nextAt = daysFromNow(p.cadenceWeeks * 7); }
+        }
+        viewAppt(id);
+      }).catch(function (e) { adv.disabled = false; fail(e); });
     };
   }
 
@@ -200,9 +201,10 @@
     function render(q) {
       q = (q || "").toLowerCase();
       var rows = D.pets.filter(function (p) { return !q || (p.name + p.owner + p.breed + p.area).toLowerCase().indexOf(q) > -1; }).map(function (p) {
-        var due = daysFromNow(p.lastGroom + p.cadenceWeeks * 7), overdue = due < today;
+        var due = p.nextAt || daysFromNow((p.lastGroom || 0) + p.cadenceWeeks * 7), overdue = !p.nextAt && due < today;
+        var label = p.nextAt ? "Booked " : overdue ? "Due " : "Next ";
         return '<a class="appt" href="#pet/' + p.id + '">' + avatar(p) + '<span class="appt-body"><b>' + esc(p.name) + "</b><small>" + esc(p.breed) + " · " + esc(p.owner) + "</small></span>" +
-          '<span class="chip ' + (overdue ? "chip-due" : "chip-confirmed") + '">' + (overdue ? "Due " : "Next ") + shortDate(due) + "</span>" + icon("chev", "chev") + "</a>";
+          '<span class="chip ' + (overdue ? "chip-due" : "chip-confirmed") + '">' + label + shortDate(due) + "</span>" + icon("chev", "chev") + "</a>";
       });
       $("[data-petlist]").innerHTML = rows.join("") || '<p class="muted pad">No matches.</p>';
     }
@@ -213,20 +215,28 @@
   function viewPet(id) {
     var p = petById(id); if (!p) return viewPets();
     setHeader(p.name, p.breed, "pets", "pets");
-    var last = daysFromNow(p.lastGroom), due = daysFromNow(p.lastGroom + p.cadenceWeeks * 7);
+    var last = p.lastGroom == null ? null : daysFromNow(p.lastGroom), due = p.nextAt || daysFromNow((p.lastGroom || 0) + p.cadenceWeeks * 7);
     view.innerHTML = '<section class="card pet-hero">' + avatar(p, 72) + "<div><h2>" + esc(p.name) + "</h2><p>" + esc(p.breed) + " · " + p.age + " yrs · " + p.weight + " lbs</p>" +
       '<div class="tags">' + (p.tags || ["Regular"]).map(function (t) { return '<span class="tag">' + esc(t) + "</span>"; }).join("") + "</div></div></section>" +
-      '<section class="card"><dl class="facts"><dt>Owner</dt><dd>' + esc(p.owner) + "</dd><dt>Phone</dt><dd><a href=\"tel:" + p.phone.replace(/\D/g, "") + '">' + esc(p.phone) + "</a></dd><dt>Area</dt><dd>" + esc(p.area) + "</dd><dt>Coat</dt><dd>" + esc(p.coat) + "</dd><dt>Cadence</dt><dd>Every " + p.cadenceWeeks + " weeks</dd><dt>Last groom</dt><dd>" + shortDate(last) + "</dd><dt>Next due</dt><dd>" + shortDate(due) + "</dd></dl>" +
+      '<section class="card"><dl class="facts"><dt>Owner</dt><dd>' + esc(p.owner) + "</dd><dt>Phone</dt><dd><a href=\"tel:" + p.phone.replace(/\D/g, "") + '">' + esc(p.phone) + "</a></dd><dt>Area</dt><dd>" + esc(p.area) + "</dd><dt>Coat</dt><dd>" + esc(p.coat) + "</dd><dt>Cadence</dt><dd>Every " + p.cadenceWeeks + " weeks</dd><dt>Last groom</dt><dd>" + (last ? shortDate(last) : "—") + "</dd><dt>" + (p.nextAt ? "Booked" : "Next due") + "</dt><dd>" + shortDate(due) + "</dd></dl>" +
       '<div class="note"><b>Groomer notes</b><p>' + esc(p.notes) + "</p></div></section>" +
-      '<button class="btn full" data-book>Book next groom</button>';
-    $("[data-book]").onclick = function () { toast("Booking request saved for " + shortDate(due) + " (prototype)."); };
+      (p.hasNext ? "" : '<button class="btn full" data-book>Book next groom · ' + shortDate(due < today ? today : due) + "</button>");
+    var bk = $("[data-book]");
+    if (bk) bk.onclick = function () {
+      var when = due < today ? today : due;
+      bk.disabled = true;
+      Api.bookNext(p, when).then(function () {
+        toast(Api.mode === "live" ? "Booked " + shortDate(when) + " at 9:00 AM — confirm details with the owner." : "Demo mode — nothing was booked.");
+        viewPet(id);
+      }).catch(function (e) { bk.disabled = false; fail(e); });
+    };
   }
 
   function overallProgress() {
     var all = [].concat.apply([], D.courses.map(function (c) { return c.modules; }));
-    return Math.round(all.filter(function (m) { return m.done; }).length / all.length * 100);
+    return all.length ? Math.round(all.filter(function (m) { return m.done; }).length / all.length * 100) : 0;
   }
-  function coursePct(c) { return Math.round(c.modules.filter(function (m) { return m.done; }).length / c.modules.length * 100); }
+  function coursePct(c) { return c.modules.length ? Math.round(c.modules.filter(function (m) { return m.done; }).length / c.modules.length * 100) : 0; }
 
   function viewAcademy() {
     setHeader("Academy", "Your training. Your growth.", null, "academy");
@@ -236,7 +246,7 @@
       '<div class="seg"><button class="on">My Courses</button><button data-browse>Browse</button></div>' +
       '<div class="card list">' + D.courses.map(function (c) {
         var cp = coursePct(c);
-        return '<a class="course" href="#course/' + c.id + '">' + avatar({ name: c.title, photo: c.photo }, 54) +
+        return '<a class="course" href="#course/' + c.id + '">' + avatar({ name: c.title, photo: c.photo, color: c.color }, 54) +
           '<span class="course-body"><b>' + esc(c.title) + "</b><small>" + c.modules.length + " modules · " + c.duration + '</small><span class="bar"><i style="width:' + cp + '%"></i></span></span>' +
           '<span class="pct ' + (cp === 100 ? "full" : "") + '">' + (cp === 100 ? icon("check") : cp + "%") + "</span></a>";
       }).join("") + "</div>";
@@ -246,16 +256,20 @@
   function viewCourse(id) {
     var c = D.courses.find(function (x) { return x.id === id; }); if (!c) return viewAcademy();
     setHeader(c.title, c.modules.length + " modules · " + c.duration, "academy", "academy");
-    view.innerHTML = '<section class="card video">' + icon("play") + "<span>Video lessons are being filmed</span></section>" +
+    var vid = (c.modules.find(function (m) { return m.video && !m.done; }) || c.modules.find(function (m) { return m.video; }) || {}).video;
+    view.innerHTML = (vid ? '<a class="card video" target="_blank" rel="noopener" href="' + esc(vid) + '">' + icon("play") + "<span>Play next lesson</span></a>"
+                          : '<section class="card video">' + icon("play") + "<span>Video lessons are being filmed</span></section>") +
       '<section class="card"><div class="card-head"><h2>Modules</h2><span class="muted">' + coursePct(c) + '% complete</span></div><ul class="modules">' +
       c.modules.map(function (m, i) {
         return '<li><label><input type="checkbox" data-mod="' + i + '"' + (m.done ? " checked" : "") + '><span class="box">' + icon("check") + '</span><span><small>Module ' + (i + 1) + "</small>" + esc(m.title) + "</span></label></li>";
       }).join("") + "</ul></section>";
     view.querySelectorAll("[data-mod]").forEach(function (cb) {
       cb.onchange = function () {
-        var m = c.modules[+cb.dataset.mod]; m.done = cb.checked; progress[m.key] = cb.checked; store.set("progress", progress);
-        if (coursePct(c) === 100) toast("Course complete! 🎉");
-        viewCourse(id);
+        var m = c.modules[+cb.dataset.mod];
+        Api.setModule(m, cb.checked).then(function () {
+          if (coursePct(c) === 100) toast("Course complete! 🎉");
+          viewCourse(id);
+        }).catch(function (e) { cb.checked = !cb.checked; fail(e); });
       };
     });
   }
@@ -266,8 +280,12 @@
     view.innerHTML = '<div class="dash-row">' + perfCard() +
       '<section class="card"><h2>Unit economics</h2><dl class="facts"><dt>Average ticket</dt><dd>' + money(avg) + "</dd><dt>Rebook rate</dt><dd>" + W.rebookRate + "%</dd><dt>Grooms / day</dt><dd>" + (W.bookings / 5).toFixed(1) + "</dd><dt>Drive time today</dt><dd>" + D.appointments.reduce(function (s, a) { return s + a.drive; }, 0) + " min</dd></dl></section></div>" +
       '<section class="card"><h2>Get the app</h2><p class="muted">On iPhone: open this page in Safari, tap Share, then <b>Add to Home Screen</b>. On Android: tap <b>Install app</b> in Chrome\'s menu.</p><button class="btn ghost" data-install-again>Install Aardvark</button></section>' +
-      '<p class="muted center small">Prototype with sample data · <a href="../">aardvark website</a></p>';
+      (Api.mode === "live"
+        ? '<section class="card"><h2>Account</h2><dl class="facts"><dt>Signed in</dt><dd>' + esc(Api.user.email || "") + "</dd><dt>Role</dt><dd>" + esc(Api.staff.role) + '</dd></dl><button class="btn ghost full" data-signout>Sign out</button></section>'
+        : '<p class="muted center small">Demo mode · sample data · <a href="../">Aardvark website</a></p>');
     $("[data-install-again]").onclick = promptInstall;
+    var so = $("[data-signout]");
+    if (so) so.onclick = function () { Api.signOut().then(function () { D = null; showLogin(); }); };
   }
 
   /* ---------- router ---------- */
@@ -286,10 +304,62 @@
     }
     view.scrollTop = 0; window.scrollTo(0, 0);
   }
-  window.addEventListener("hashchange", route);
   var lastWide = isWide();
-  window.addEventListener("resize", function () { if (isWide() !== lastWide) { lastWide = isWide(); route(); } });
-  route();
+  window.addEventListener("resize", function () { if (D && isWide() !== lastWide) { lastWide = isWide(); route(); } });
+
+  /* ---------- sign-in + boot ---------- */
+  function chrome(on) { document.body.classList.toggle("signed-out", !on); }
+
+  function showLogin(msg) {
+    chrome(false);
+    if (activeMap) { activeMap.remove(); activeMap = null; }
+    setHeader("Sign in", "Aardvark staff", null, "");
+    view.innerHTML = '<section class="card login"><img src="../assets/mark.png" alt="" width="72" height="72">' +
+      '<h2>Welcome back</h2><p class="muted">Sign in with the email your Aardvark owner set up for you.</p>' +
+      '<form data-login><label>Email<input type="email" name="email" required autocomplete="username"></label>' +
+      '<label>Password<input type="password" name="password" autocomplete="current-password"></label>' +
+      '<button class="btn full" type="submit">Sign in</button>' +
+      '<button class="btn ghost full" type="button" data-link>Email me a sign-in link</button>' +
+      '<p class="form-msg" role="status">' + esc(msg || "") + "</p></form></section>";
+    var f = $("[data-login]"), out = f.querySelector(".form-msg");
+    f.onsubmit = function (e) {
+      e.preventDefault();
+      var email = f.email.value.trim(), pw = f.password.value;
+      if (!pw) { out.textContent = "Enter your password, or use the email link."; return; }
+      out.textContent = "Signing in…";
+      Api.signIn(email, pw).then(start).catch(function (err) { out.textContent = err.message || "Sign-in failed."; });
+    };
+    $("[data-link]").onclick = function () {
+      var email = f.email.value.trim();
+      if (!email || !f.email.checkValidity()) { out.textContent = "Enter your email first."; return; }
+      out.textContent = "Sending…";
+      Api.sendLink(email).then(function () { out.textContent = "Check your email for a sign-in link (open it on this device)."; })
+        .catch(function (err) { out.textContent = err.message || "Couldn't send the link."; });
+    };
+  }
+
+  function showError(err) {
+    console.error(err);
+    chrome(true);
+    setHeader("Something went wrong", "", null, "");
+    view.innerHTML = '<section class="card"><p>' + esc(err && err.message ? err.message : String(err)) + '</p><button class="btn full" data-retry>Try again</button>' +
+      (Api.mode === "live" ? '<button class="btn ghost full" data-out>Sign out</button>' : "") + "</section>";
+    $("[data-retry]").onclick = start;
+    var o = $("[data-out]"); if (o) o.onclick = function () { Api.signOut().then(function () { showLogin(); }); };
+  }
+
+  function start() {
+    view.innerHTML = '<p class="muted pad center">Loading…</p>';
+    return Api.load().then(function (data) {
+      D = data; chrome(true);
+      document.documentElement.classList.toggle("demo", Api.mode === "demo");
+      route();
+    }).catch(showError);
+  }
+
+  Api.onSignedOut = function () { D = null; showLogin(); };
+  window.addEventListener("hashchange", function () { if (D) route(); });
+  Api.init().then(function (r) { r.needsLogin ? showLogin() : start(); }).catch(showError);
 
   /* ---------- install + offline ---------- */
   var deferred = null, banner = $("[data-install]");

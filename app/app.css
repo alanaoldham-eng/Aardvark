@@ -115,6 +115,7 @@ h2{font-size:1.05rem}
 .perf-row small{display:block;color:var(--muted);font-size:.75rem}
 .perf-row b{font-size:1.35rem}
 .perf-row em{font-style:normal;color:#2f7d62;font-size:.75rem;font-weight:700;margin-left:4px}
+.perf-row em.down{color:var(--rust)}
 .spark{width:100%;height:56px;margin:8px 0 4px}
 .spark polyline{fill:none;stroke:#2f7d62;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .dash-row{display:grid;gap:14px}
@@ -152,6 +153,20 @@ h2{font-size:1.05rem}
 .toast{position:fixed;z-index:900;left:50%;bottom:calc(var(--tabbar) + var(--safe-b) + 16px);transform:translate(-50%,20px);background:var(--ink);color:#fff;padding:10px 16px;border-radius:12px;font-size:.88rem;opacity:0;pointer-events:none;transition:.25s;max-width:90vw;text-align:center}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 .leaflet-popup-content a{color:var(--green);font-weight:600}
+
+/* sign-in */
+.signed-out .tabbar,.signed-out .side-nav{display:none}
+.signed-out .main{padding-bottom:24px}
+.login{max-width:420px;width:100%;margin:24px auto 0;text-align:center;padding:28px 22px}
+.login img{border-radius:50%;margin-bottom:8px}
+.login h2{font-size:1.4rem}
+.login form{text-align:left;margin-top:18px}
+.login label{display:block;font-size:.85rem;font-weight:600;margin-bottom:12px}
+.login input{display:block;width:100%;margin-top:6px;font:inherit;font-weight:400;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.login .btn{margin-top:8px}
+.form-msg{min-height:1.3em;font-size:.88rem;color:var(--rust);margin:12px 0 0;text-align:center}
+.btn:disabled{opacity:.6;cursor:default}
+a.card.video{text-decoration:none}
 
 /* embedded previews on the marketing site */
 .embed .topbar{padding-top:16px}

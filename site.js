@@ -1,8 +1,9 @@
 // Aardvark marketing site
 (function () {
-  // Where waitlist submissions go. Paste a Formspree (or similar) form URL here
-  // to start collecting sign-ups. Leave empty and the form runs in preview mode.
-  var WAITLIST_ENDPOINT = "";
+  // Waitlist sign-ups go straight into the Supabase "waitlist" table once
+  // config.js has the Supabase URL + publishable key. No library needed.
+  var CFG = window.AARDVARK_CONFIG || {};
+  var LIVE = !!(CFG.supabaseUrl && CFG.supabaseKey);
 
   document.getElementById("yr").textContent = new Date().getFullYear();
 
@@ -65,21 +66,28 @@
     e.preventDefault();
     msg.className = "form-msg";
     var data = Object.fromEntries(new FormData(form).entries());
+    data.name = (data.name || "").trim(); data.contact = (data.contact || "").trim();
     if (!data.name || !data.contact || !/^\d{5}$/.test(data.zip || "")) {
       msg.textContent = "Please add your name, a way to reach you, and a 5-digit ZIP.";
       msg.classList.add("err");
       return;
     }
-    if (!WAITLIST_ENDPOINT) {
+    if (!LIVE) {
       msg.textContent = "Preview mode — the waitlist isn't connected yet, so this wasn't sent.";
       msg.classList.add("err");
       return;
     }
     msg.textContent = "Sending…";
-    fetch(WAITLIST_ENDPOINT, {
+    var row = {
+      name: data.name, zip: data.zip, contact: data.contact,
+      breed: data.breed || null, weight: data.weight || null, coat: data.coat || null,
+      groomer_interest: !!data.groomer, source: location.hostname
+    };
+    fetch(CFG.supabaseUrl.replace(/\/$/, "") + "/rest/v1/waitlist", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(data)
+      headers: Object.assign({ "Content-Type": "application/json", apikey: CFG.supabaseKey, Prefer: "return=minimal" },
+        /^eyJ/.test(CFG.supabaseKey) ? { Authorization: "Bearer " + CFG.supabaseKey } : {}), // legacy anon JWT keys
+      body: JSON.stringify(row)
     }).then(function (r) {
       if (!r.ok) throw new Error(r.status);
       form.reset();

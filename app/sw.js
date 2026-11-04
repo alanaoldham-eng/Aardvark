@@ -1,6 +1,6 @@
 // Aardvark service worker: keeps the app shell available offline.
 // Bump VERSION whenever app files change so phones pick up the new build.
-var VERSION = "aardvark-v2";
+var VERSION = "aardvark-v3";
 var SHELL = [
   "./", "./index.html", "./app.css", "./app.js", "./api.js", "./data.js", "./manifest.webmanifest",
   "../config.js", "../vendor/supabase/supabase.js",
@@ -24,7 +24,9 @@ self.addEventListener("fetch", function (e) {
   var url = new URL(req.url);
   // Same-origin files: network first so updates show up, cache as fallback for offline.
   if (url.origin === location.origin) {
-    e.respondWith(fetch(req).then(function (res) {
+    // Settings and the page itself always skip the browser's short-term cache
+    var fresh = /\/config\.js$|\/$|\.html$/.test(url.pathname) ? { cache: "no-cache" } : undefined;
+    e.respondWith(fetch(req, fresh).then(function (res) {
       var copy = res.clone();
       caches.open(VERSION).then(function (c) { c.put(req, copy); });
       return res;

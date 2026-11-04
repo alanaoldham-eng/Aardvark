@@ -7,8 +7,8 @@
 // =====================================================================
 window.AARDVARK_CONFIG = {
   // Supabase → Project Settings → API (or "Connect")
-  supabaseUrl: "",   // e.g. "https://abcdefghijkl.supabase.co"
-  supabaseKey: "",   // the publishable (sb_publishable_…) or anon key
+  supabaseUrl: "https://dcwciiayykicjafdqgmw.supabase.co",   // e.g. "https://abcdefghijkl.supabase.co"
+  supabaseKey: "sb_publishable_-wdSeMHq3pLoLWB82BXZnA_uqj2lYWk",   // the publishable (sb_publishable_…) or anon key
 
   // Leave both empty to run the app on built-in sample data (demo mode).
 };

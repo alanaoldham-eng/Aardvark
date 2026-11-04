@@ -228,10 +228,24 @@ alter table public.course_modules  enable row level security;
 alter table public.module_progress enable row level security;
 alter table public.waitlist        enable row level security;
 
--- Start from zero for the public role, then grant only the waitlist insert.
+-- Table access ("grants"). New Supabase projects don't expose tables to the
+-- app automatically, so each one is listed here. Grants decide WHICH tables a
+-- role can reach; the RLS policies below decide WHICH ROWS. Re-run this file
+-- after adding a table, and add the table here.
+grant usage on schema public to anon, authenticated, service_role;
 revoke all on all tables in schema public from anon;
 grant insert on public.waitlist to anon;
-grant insert on public.waitlist to authenticated;
+
+grant select, insert, update, delete on
+  public.vans, public.staff, public.clients, public.pets, public.appointments,
+  public.courses, public.course_modules, public.module_progress
+  to authenticated;
+grant select, insert, delete on public.waitlist to authenticated;
+grant select on public.pet_overview, public.weekly_stats to authenticated;
+
+grant all on all tables in schema public to service_role;  -- dashboard / admin scripts
+
+grant execute on function public.is_staff(), public.is_owner() to anon, authenticated, service_role;
 
 do $$
 declare t text;

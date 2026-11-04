@@ -21,10 +21,21 @@ The website and app are plain files with no build step and no server code. Every
 ## 1. Connect Supabase
 
 ### 1a. Create the project
-1. Sign up at **supabase.com** and click **New project**.
-2. Name it `aardvark` and choose a strong database password. Save the password in your password manager.
-3. Choose **Region: East US (North Virginia)**, the closest to the Gulf Coast.
-4. Plan: **Free** while you build. Free projects pause after 7 days without use; click **Restore** in the dashboard if that happens. Switch to **Pro** before real customers rely on the app.
+On **supabase.com → New project**, fill in:
+
+| Field | Value |
+|---|---|
+| Organization | Aardvark (Free) |
+| GitHub (optional) | **Leave blank.** It's only for auto-applying database changes from the repo, which we don't use yet. |
+| Project name | `aardvark` |
+| Database password | Click **Generate a password** and save it in your password manager |
+| Region | **Americas**. If you open "Need a specific region?", pick **East US (North Virginia)** |
+| Enable Data API | ✅ on (the app needs it) |
+| Automatically expose new tables | ⬜ **off**. Safer; `schema.sql` grants access table by table |
+| Enable automatic RLS | ✅ on |
+| Advanced configuration | leave as is |
+
+Plan: **Free** while you build. Free projects pause after 7 days without use; click **Restore** in the dashboard if that happens. Switch to **Pro** before real customers rely on the app.
 
 ### 1b. Create the tables
 1. In the project, go to **SQL Editor → New query**.

@@ -121,14 +121,17 @@
   /* ---------------- public API ---------------- */
   Api.init = async function () {
     if (!LIVE) return { needsLogin: false };
-    var s = (await sb.auth.getSession()).data.session;
-    if (location.search.indexOf("code=") > -1) history.replaceState(null, "", location.pathname + location.hash);
-    Api.user = s ? s.user : null;
+    var recovery = false;
     sb.auth.onAuthStateChange(function (evt, session) {
       Api.user = session ? session.user : null;
+      if (evt === "PASSWORD_RECOVERY") { recovery = true; if (Api.onRecovery) Api.onRecovery(); }
       if (evt === "SIGNED_OUT" && Api.onSignedOut) Api.onSignedOut();
     });
-    return { needsLogin: !Api.user };
+    var s = (await sb.auth.getSession()).data.session;
+    await new Promise(function (r) { setTimeout(r, 50); }); // let a recovery event arrive
+    if (location.search.indexOf("code=") > -1) history.replaceState(null, "", location.pathname + location.hash);
+    Api.user = s ? s.user : null;
+    return { needsLogin: !Api.user, recovery: recovery };
   };
 
   Api.load = async function () {
@@ -174,6 +177,39 @@
   };
 
   Api.signOut = async function () { if (LIVE) await sb.auth.signOut(); Api.user = null; };
+
+  var appUrl = function () { return location.origin + location.pathname; };
+
+  // Self sign-up: the account starts inactive until an owner approves it on the Team screen.
+  Api.signUp = async function (name, email, password) {
+    var r = await sb.auth.signUp({ email: email, password: password,
+      options: { data: { full_name: name }, emailRedirectTo: appUrl() } });
+    if (r.error) throw r.error;
+    // Supabase hides "already registered" for privacy: no identities means the email is taken
+    if (r.data.user && r.data.user.identities && r.data.user.identities.length === 0)
+      throw new Error("That email already has an account. Sign in, or use “Forgot password?”.");
+    Api.user = r.data.session ? r.data.user : null;
+    return { signedIn: !!r.data.session };
+  };
+
+  Api.resetPassword = async function (email) {
+    var r = await sb.auth.resetPasswordForEmail(email, { redirectTo: appUrl() });
+    if (r.error) throw r.error;
+  };
+
+  Api.updatePassword = async function (password) {
+    var r = await sb.auth.updateUser({ password: password });
+    if (r.error) throw r.error;
+  };
+
+  // Owners only (enforced by the database, not just the screen)
+  Api.listTeam = async function () {
+    return must(await sb.from("staff").select("id, full_name, email, role, active, created_at").order("created_at"));
+  };
+  Api.updateStaff = async function (id, patch) {
+    var rows = must(await sb.from("staff").update(patch).eq("id", id).select("id"));
+    if (!rows || !rows.length) throw new Error("Only owners can change the team.");
+  };
 
   window.Api = Api;
 })();

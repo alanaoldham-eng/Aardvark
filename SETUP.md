@@ -40,21 +40,24 @@ Plan: **Free** while you build. Free projects pause after 7 days without use; cl
 ### 1b. Create the tables
 1. In the project, go to **SQL Editor → New query**.
 2. Paste in all of [`supabase/schema.sql`](supabase/schema.sql) and click **Run**. It should end with "Success. No rows returned."
+   **Whenever `schema.sql` is updated in the repo, run it again the same way.** It's safe to re-run, and it keeps your data.
 3. Open a new query, paste [`supabase/seed.sql`](supabase/seed.sql) and click **Run**. This loads the sample van, 7 sample pets, today's route, 8 weeks of history and the Academy courses.
    *Skip this step if you want to start with an empty database. You'll still need at least one row in the `vans` table.*
 
-### 1c. Lock down sign-ups and add your team
-1. Go to **Authentication → Sign In / Providers**. Turn **off** "Allow new users to sign up". Leave **Email** turned on.
-2. Go to **Authentication → Users → Add user → Create new user**. Add each partner with their email and a temporary password, and tick **Auto Confirm User**.
-3. New users start **inactive** as a safety net. Back in **SQL Editor**, activate everyone and make the partners owners. Replace the emails with your own:
+### 1c. Sign-ups and your team
+Staff create their own accounts in the app, and an owner approves them. New accounts start **inactive** and can't see any data until approved.
+
+1. Go to **Authentication → Sign In / Providers**. Turn **on** "Allow new users to sign up", and keep **Confirm email** on.
+2. **First owner only:** create your own account, either in the app (**Create a staff account**) or in **Authentication → Users → Add user** with **Auto Confirm User** ticked. Then switch yourself on in **SQL Editor**:
    ```sql
    update public.staff s set active = true, role = 'owner'
    from auth.users u
-   where u.id = s.id
-     and u.email in ('alana@aardvarkgroom.com', 'jared@aardvarkgroom.com', 'bryan@aardvarkgroom.com');
+   where u.id = s.id and lower(trim(u.email)) = lower(trim('you@example.com'));
    ```
-   Hired groomers or Academy students later get `role = 'groomer'` or `'student'` and `active = true`.
-   Owners can also flip these in **Table Editor → staff**.
+   ("Success. No rows returned" is normal for an update.)
+3. **Everyone after that:** they tap **Create a staff account** in the app and confirm their email. You approve them in the app under **Business → Team** and choose their role (Owner, Groomer or Academy student). You can switch people off or change roles there too. The database always keeps at least one active owner.
+
+> Supabase's built-in email sender only allows a few emails per hour. That's fine for a small team. If confirmation or reset emails stop arriving, wait an hour, or set up your own email sender under **Authentication → Emails → SMTP Settings**.
 
 ### 1d. Allow sign-in links from your web addresses
 Go to **Authentication → URL Configuration**:
@@ -80,7 +83,7 @@ Go to **Authentication → URL Configuration**:
 
 ### 1f. Check it works
 - Open the app and sign in with your email and temporary password. You should see the sample route.
-- Change your password: use **Email me a sign-in link**, or have an owner reset it in Supabase → Authentication.
+- Forgot a password? Tap **Forgot password?** on the sign-in screen and open the email link in the same browser.
 - Submit the website's waitlist form, then check **Table Editor → waitlist**.
 - To preview the app with built-in sample data at any time, add `?demo=1` to the app address.
 

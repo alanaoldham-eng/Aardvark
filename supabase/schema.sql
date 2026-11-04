@@ -26,9 +26,11 @@ create table if not exists public.staff (
   role        text not null default 'groomer' check (role in ('owner', 'groomer', 'student')),
   van_id      text references public.vans(id) on delete set null,
   active      boolean not null default false,
+  email       text,
   created_at  timestamptz not null default now()
 );
 alter table public.staff add column if not exists active boolean not null default false;
+alter table public.staff add column if not exists email text;
 
 create table if not exists public.clients (
   id          uuid primary key default gen_random_uuid(),
@@ -161,11 +163,31 @@ $$;
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.staff (id, full_name)
-  values (new.id, coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1)))
-  on conflict (id) do nothing;
+  insert into public.staff (id, full_name, email)
+  values (new.id, coalesce(nullif(trim(new.raw_user_meta_data->>'full_name'), ''), split_part(new.email, '@', 1)), new.email)
+  on conflict (id) do update set email = excluded.email;
   return new;
 end $$;
+
+-- Fill in emails for accounts created before the email column existed
+update public.staff s set email = u.email
+from auth.users u where u.id = s.id and s.email is distinct from u.email;
+
+-- Never allow the last active owner to be removed, demoted or switched off
+create or replace function public.staff_keep_an_owner() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if old.role = 'owner' and old.active
+     and (tg_op = 'DELETE' or new.role <> 'owner' or not new.active)
+     and not exists (select 1 from public.staff where role = 'owner' and active and id <> old.id) then
+    raise exception 'Aardvark needs at least one active owner. Make someone else an owner first.';
+  end if;
+  return coalesce(new, old);
+end $$;
+
+drop trigger if exists staff_keep_an_owner on public.staff;
+create trigger staff_keep_an_owner before update or delete on public.staff
+  for each row execute function public.staff_keep_an_owner();
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users

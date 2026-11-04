@@ -166,6 +166,22 @@ h2{font-size:1.05rem}
 .login .btn{margin-top:8px}
 .form-msg{min-height:1.3em;font-size:.88rem;color:var(--rust);margin:12px 0 0;text-align:center}
 .btn:disabled{opacity:.6;cursor:default}
+.login-links{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+.linkish{background:none;border:0;color:var(--green);font:600 .9rem var(--sans);cursor:pointer;padding:6px;text-decoration:underline;text-underline-offset:3px}
+.hint{display:block;font-weight:400;color:var(--muted);font-size:.75rem;margin-top:4px}
+
+/* team */
+.member{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line)}
+.card .member:last-child{border-bottom:0}
+.member.busy{opacity:.5;pointer-events:none}
+.member-body{flex:1;min-width:0}
+.member-body small{display:block;color:var(--muted);font-size:.8rem;overflow:hidden;text-overflow:ellipsis}
+.member-actions{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.member-actions select{font:inherit;font-size:.85rem;padding:7px 10px;border:1px solid var(--line);border-radius:10px;background:#fff}
+.pill.ghost{background:var(--rust-soft);color:var(--rust)}
+.team-link{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.team-link span{display:flex;flex-direction:column}
+.team-link b{color:var(--green);font-family:var(--serif);font-size:1.05rem}
 a.card.video{text-decoration:none}
 
 /* embedded previews on the marketing site */

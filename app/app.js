@@ -280,12 +280,51 @@
     view.innerHTML = '<div class="dash-row">' + perfCard() +
       '<section class="card"><h2>Unit economics</h2><dl class="facts"><dt>Average ticket</dt><dd>' + money(avg) + "</dd><dt>Rebook rate</dt><dd>" + W.rebookRate + "%</dd><dt>Grooms / day</dt><dd>" + (W.bookings / 5).toFixed(1) + "</dd><dt>Drive time today</dt><dd>" + D.appointments.reduce(function (s, a) { return s + a.drive; }, 0) + " min</dd></dl></section></div>" +
       (MOBILE && !standalone ? '<section class="card"><h2>Get the app</h2><p class="muted">On iPhone: open this page in Safari, tap Share, then <b>Add to Home Screen</b>. On Android: tap <b>Install app</b> in Chrome\'s menu.</p><button class="btn ghost" data-install-again>Install Aardvark</button></section>' : "") +
+      (Api.mode === "live" && Api.staff.role === "owner"
+        ? '<a class="card team-link" href="#team"><span><b>Team</b><small class="muted">Approve new staff, set roles</small></span>' + icon("chev", "chev") + "</a>" : "") +
       (Api.mode === "live"
         ? '<section class="card"><h2>Account</h2><dl class="facts"><dt>Signed in</dt><dd>' + esc(Api.user.email || "") + "</dd><dt>Role</dt><dd>" + esc(Api.staff.role) + '</dd></dl><button class="btn ghost full" data-signout>Sign out</button></section>'
         : '<p class="muted center small">Demo mode · sample data · <a href="../">Aardvark website</a></p>');
     var ia = $("[data-install-again]"); if (ia) ia.onclick = promptInstall;
     var so = $("[data-signout]");
     if (so) so.onclick = function () { Api.signOut().then(function () { D = null; showLogin(); }); };
+  }
+
+  var ROLES = [["owner", "Owner"], ["groomer", "Groomer"], ["student", "Academy student"]];
+  function viewTeam() {
+    setHeader("Team", "Approve new staff and set roles", "more", "more");
+    if (Api.mode !== "live") { view.innerHTML = '<section class="card"><p class="muted">The team list is available once the app is connected to the database.</p></section>'; return; }
+    if (!Api.staff || Api.staff.role !== "owner") { view.innerHTML = '<section class="card"><p class="muted">Only owners can manage the team.</p></section>'; return; }
+    view.innerHTML = '<p class="muted pad center">Loading team…</p>';
+    Api.listTeam().then(function (team) {
+      var pending = team.filter(function (m) { return !m.active; });
+      var active = team.filter(function (m) { return m.active; });
+      function row(m) {
+        var me = m.id === Api.user.id;
+        return '<div class="member" data-id="' + m.id + '">' + avatar({ name: m.full_name || m.email || "?", color: m.active ? "#17604e" : "#b4532f" }, 42) +
+          '<div class="member-body"><b>' + esc(m.full_name || "—") + (me ? ' <span class="tag">You</span>' : "") + "</b><small>" + esc(m.email || "") + "</small>" +
+          '<div class="member-actions"><select data-role aria-label="Role"' + (me ? " disabled" : "") + ">" +
+          ROLES.map(function (r) { return '<option value="' + r[0] + '"' + (m.role === r[0] ? " selected" : "") + ">" + r[1] + "</option>"; }).join("") + "</select>" +
+          (m.active ? (me ? "" : '<button class="pill ghost" data-off>Switch off</button>') : '<button class="pill" data-approve>Approve</button>') +
+          "</div></div></div>";
+      }
+      view.innerHTML =
+        (pending.length ? '<section class="card"><div class="card-head"><h2>Waiting for approval</h2><span class="chip chip-due">' + pending.length + "</span></div>" + pending.map(row).join("") + "</section>" : "") +
+        '<section class="card"><div class="card-head"><h2>Active team</h2><span class="muted">' + active.length + "</span></div>" + (active.map(row).join("") || '<p class="muted">No one yet.</p>') + "</section>" +
+        '<section class="card"><h2>Adding someone</h2><p class="muted">Ask them to open this app, tap <b>Create a staff account</b>, and confirm their email. They\'ll appear above for you to approve. Switched-off staff can be approved again any time.</p></section>';
+      view.querySelectorAll(".member").forEach(function (el) {
+        var id = el.dataset.id, m = team.find(function (x) { return x.id === id; });
+        function save(patch, msg) {
+          el.classList.add("busy");
+          Api.updateStaff(id, patch).then(function () { toast(msg); viewTeam(); })
+            .catch(function (e) { el.classList.remove("busy"); fail(e); viewTeam(); });
+        }
+        var sel = el.querySelector("[data-role]"), ap = el.querySelector("[data-approve]"), off = el.querySelector("[data-off]");
+        if (sel && !sel.disabled) sel.onchange = function () { save({ role: sel.value }, (m.full_name || "Role") + " is now " + sel.options[sel.selectedIndex].text.toLowerCase() + "."); };
+        if (ap) ap.onclick = function () { save({ active: true, role: sel.value }, (m.full_name || "They") + " can sign in now."); };
+        if (off) off.onclick = function () { if (confirm("Switch off " + (m.full_name || m.email) + "? They won't see any data until approved again.")) save({ active: false }, "Switched off."); };
+      });
+    }).catch(showError);
   }
 
   /* ---------- router ---------- */
@@ -300,6 +339,7 @@
       case "academy": viewAcademy(); break;
       case "course": viewCourse(h[1]); break;
       case "more": viewMore(); break;
+      case "team": viewTeam(); break;
       default: viewToday();
     }
     view.scrollTop = 0; window.scrollTo(0, 0);
@@ -320,14 +360,17 @@
       '<label>Password<input type="password" name="password" autocomplete="current-password"></label>' +
       '<button class="btn full" type="submit">Sign in</button>' +
       '<button class="btn ghost full" type="button" data-link>Email me a sign-in link</button>' +
-      '<p class="form-msg" role="status">' + esc(msg || "") + "</p></form></section>";
+      '<p class="form-msg" role="status">' + esc(msg || "") + "</p></form>" +
+      '<div class="login-links"><button type="button" class="linkish" data-forgot>Forgot password?</button>' +
+      '<button type="button" class="linkish" data-signup>New to the team? Create a staff account</button></div></section>';
     var f = $("[data-login]"), out = f.querySelector(".form-msg");
     f.onsubmit = function (e) {
       e.preventDefault();
       var email = f.email.value.trim(), pw = f.password.value;
       if (!pw) { out.textContent = "Enter your password, or use the email link."; return; }
       out.textContent = "Signing in…";
-      Api.signIn(email, pw).then(start).catch(function (err) { out.textContent = err.message || "Sign-in failed."; });
+      Api.signIn(email, pw).then(function () { history.replaceState(null, "", location.pathname + location.search + "#today"); return start(); })
+        .catch(function (err) { out.textContent = err.message || "Sign-in failed."; });
     };
     $("[data-link]").onclick = function () {
       var email = f.email.value.trim();
@@ -335,6 +378,65 @@
       out.textContent = "Sending…";
       Api.sendLink(email).then(function () { out.textContent = "Check your email for a sign-in link (open it on this device)."; })
         .catch(function (err) { out.textContent = err.message || "Couldn't send the link."; });
+    };
+    $("[data-forgot]").onclick = function () {
+      var email = f.email.value.trim();
+      if (!email || !f.email.checkValidity()) { out.textContent = "Enter your email above, then tap “Forgot password?” again."; f.email.focus(); return; }
+      out.textContent = "Sending…";
+      Api.resetPassword(email).then(function () {
+        out.textContent = "If that email has an account, a reset link is on its way. Open it in this same browser.";
+      }).catch(function (err) { out.textContent = err.message || "Couldn't send the reset email."; });
+    };
+    $("[data-signup]").onclick = function () { showSignup(f.email.value.trim()); };
+  }
+
+  function authCard(title, intro, fields, button, extra) {
+    return '<section class="card login"><img src="../assets/mark.png" alt="" width="72" height="72">' +
+      "<h2>" + title + '</h2><p class="muted">' + intro + "</p><form data-auth>" + fields +
+      '<button class="btn full" type="submit">' + button + "</button>" +
+      '<p class="form-msg" role="status"></p></form>' + (extra || "") + "</section>";
+  }
+
+  function showSignup(prefill) {
+    chrome(false);
+    setHeader("Create account", "Aardvark staff", null, "");
+    view.innerHTML = authCard("Join the team",
+      "Create your login. An Aardvark owner will approve it before you can see the schedule.",
+      '<label>Your name<input name="name" required autocomplete="name" maxlength="80"></label>' +
+      '<label>Email<input type="email" name="email" required autocomplete="email" value="' + esc(prefill || "") + '"></label>' +
+      '<label>Password<input type="password" name="password" required minlength="8" autocomplete="new-password"><small class="hint">At least 8 characters</small></label>',
+      "Create account",
+      '<div class="login-links"><button type="button" class="linkish" data-back-login>Already have an account? Sign in</button></div>');
+    var f = $("[data-auth]"), out = f.querySelector(".form-msg");
+    $("[data-back-login]").onclick = function () { showLogin(); };
+    f.onsubmit = function (e) {
+      e.preventDefault();
+      if (!f.checkValidity()) { f.reportValidity(); return; }
+      var btn = f.querySelector("button[type=submit]"); btn.disabled = true;
+      out.textContent = "Creating your account…";
+      Api.signUp(f.name.value.trim(), f.email.value.trim(), f.password.value).then(function (r) {
+        if (r.signedIn) return start();
+        view.innerHTML = authCard("Check your email",
+          "We sent a confirmation link to <b>" + esc(f.email.value.trim()) + "</b>. Tap it, then come back here and sign in. " +
+          "An owner will approve your account; until then you'll see a waiting message.", "", "Back to sign in");
+        $("[data-auth]").onsubmit = function (ev) { ev.preventDefault(); showLogin(); };
+      }).catch(function (err) { btn.disabled = false; out.textContent = err.message || "Couldn't create the account."; });
+    };
+  }
+
+  function showSetPassword() {
+    chrome(false);
+    setHeader("New password", "Aardvark staff", null, "");
+    view.innerHTML = authCard("Choose a new password", "Enter a new password for your Aardvark account.",
+      '<label>New password<input type="password" name="password" required minlength="8" autocomplete="new-password"><small class="hint">At least 8 characters</small></label>',
+      "Save password");
+    var f = $("[data-auth]"), out = f.querySelector(".form-msg");
+    f.onsubmit = function (e) {
+      e.preventDefault();
+      if (!f.checkValidity()) { f.reportValidity(); return; }
+      out.textContent = "Saving…";
+      Api.updatePassword(f.password.value).then(function () { toast("Password updated."); start(); })
+        .catch(function (err) { out.textContent = err.message || "Couldn't save the password."; });
     };
   }
 
@@ -358,8 +460,9 @@
   }
 
   Api.onSignedOut = function () { D = null; showLogin(); };
+  Api.onRecovery = function () { D = null; showSetPassword(); };
   window.addEventListener("hashchange", function () { if (D) route(); });
-  Api.init().then(function (r) { r.needsLogin ? showLogin() : start(); }).catch(showError);
+  Api.init().then(function (r) { r.recovery ? showSetPassword() : r.needsLogin ? showLogin() : start(); }).catch(showError);
 
   /* ---------- install + offline ---------- */
   var deferred = null, banner = $("[data-install]");

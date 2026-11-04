@@ -279,11 +279,11 @@
     var W = D.weekly, avg = Math.round(W.revenue / W.bookings);
     view.innerHTML = '<div class="dash-row">' + perfCard() +
       '<section class="card"><h2>Unit economics</h2><dl class="facts"><dt>Average ticket</dt><dd>' + money(avg) + "</dd><dt>Rebook rate</dt><dd>" + W.rebookRate + "%</dd><dt>Grooms / day</dt><dd>" + (W.bookings / 5).toFixed(1) + "</dd><dt>Drive time today</dt><dd>" + D.appointments.reduce(function (s, a) { return s + a.drive; }, 0) + " min</dd></dl></section></div>" +
-      '<section class="card"><h2>Get the app</h2><p class="muted">On iPhone: open this page in Safari, tap Share, then <b>Add to Home Screen</b>. On Android: tap <b>Install app</b> in Chrome\'s menu.</p><button class="btn ghost" data-install-again>Install Aardvark</button></section>' +
+      (MOBILE && !standalone ? '<section class="card"><h2>Get the app</h2><p class="muted">On iPhone: open this page in Safari, tap Share, then <b>Add to Home Screen</b>. On Android: tap <b>Install app</b> in Chrome\'s menu.</p><button class="btn ghost" data-install-again>Install Aardvark</button></section>' : "") +
       (Api.mode === "live"
         ? '<section class="card"><h2>Account</h2><dl class="facts"><dt>Signed in</dt><dd>' + esc(Api.user.email || "") + "</dd><dt>Role</dt><dd>" + esc(Api.staff.role) + '</dd></dl><button class="btn ghost full" data-signout>Sign out</button></section>'
         : '<p class="muted center small">Demo mode · sample data · <a href="../">Aardvark website</a></p>');
-    $("[data-install-again]").onclick = promptInstall;
+    var ia = $("[data-install-again]"); if (ia) ia.onclick = promptInstall;
     var so = $("[data-signout]");
     if (so) so.onclick = function () { Api.signOut().then(function () { D = null; showLogin(); }); };
   }
@@ -371,7 +371,8 @@
     else if (isIOS) toast("Tap Share, then “Add to Home Screen”.");
     else toast("Use your browser menu → Install app.");
   }
-  if (!EMBED && !standalone && !store.get("installDismissed", false)) {
+  var MOBILE = !!window.AARDVARK_MOBILE;
+  if (MOBILE && !EMBED && !standalone && !store.get("installDismissed", false)) {
     window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); deferred = e; banner.hidden = false; });
     if (isIOS) { $("[data-install-text]").textContent = "Tap Share, then “Add to Home Screen”."; $("[data-install-btn]").hidden = true; banner.hidden = false; }
   }

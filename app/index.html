@@ -9,7 +9,16 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Aardvark">
-  <link rel="manifest" href="manifest.webmanifest">
+  <script>
+    // Phones and tablets only: without the manifest, desktop browsers don't offer "Install".
+    window.AARDVARK_MOBILE = (navigator.userAgentData && navigator.userAgentData.mobile) ||
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS
+    if (window.AARDVARK_MOBILE) {
+      var m = document.createElement("link"); m.rel = "manifest"; m.href = "manifest.webmanifest";
+      document.head.appendChild(m);
+    }
+  </script>
   <link rel="icon" type="image/png" href="../assets/favicon.png">
   <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">

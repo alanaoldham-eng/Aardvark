@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Aardvark</title>
+  <meta name="theme-color" content="#0f4a3c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Aardvark">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="../assets/favicon.png">
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="side-brand" href="#today"><img src="../assets/mark.png" alt="" width="34" height="34"><span>AARDVARK</span></a>
+      <nav class="side-nav" data-nav></nav>
+      <a class="side-site" href="../">← Aardvark website</a>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn back" data-back hidden aria-label="Back">‹</button>
+        <div class="topbar-titles">
+          <h1 data-title>Today</h1>
+          <p data-subtitle></p>
+        </div>
+        <img class="top-mark" src="../assets/mark.png" alt="Aardvark" width="30" height="30">
+      </header>
+
+      <div class="banner" data-install hidden>
+        <img src="../assets/icon-192.png" alt="" width="40" height="40">
+        <div><b>Install Aardvark</b><span data-install-text>Add the app to your home screen.</span></div>
+        <button class="pill" data-install-btn>Install</button>
+        <button class="icon-btn" data-install-close aria-label="Dismiss">×</button>
+      </div>
+
+      <main class="view" data-view tabindex="-1"></main>
+    </div>
+
+    <nav class="tabbar" data-tabs aria-label="Tabs"></nav>
+  </div>
+
+  <div class="toast" data-toast role="status" aria-live="polite"></div>
+
+  <script src="../vendor/leaflet/leaflet.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

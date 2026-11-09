@@ -5,6 +5,8 @@ Three parts, in this order. Part 1 takes about 15 minutes; Part 3 is only for go
 1. [Connect Supabase (database + staff logins)](#1-connect-supabase)
 2. [Point aardvarkgroom.com at the site](#2-point-aardvarkgroomcom-at-the-site)
 3. [Move hosting to Cloudflare Pages when you go live](#3-go-live-move-hosting-to-cloudflare-pages)
+4. [Turn on emails, texts and reminders](#4-turn-on-emails-texts-and-reminders)
+5. [Go-live checklist](#5-go-live-checklist)
 
 How the pieces fit:
 
@@ -142,3 +144,98 @@ Nothing in the code changes. The `_headers` file in this repo is picked up by Cl
 - Supabase Pro: $25/month. No pausing, daily backups, 8 GB database.
 - Cloudflare Pages: stays free for this kind of site.
 - Porkbun domain: about $12/year.
+
+
+---
+
+## 4. Turn on emails, texts and reminders
+
+Until this is set up, every booking change is still recorded (owners can see it under **Business → Recent notifications**, marked "queued"), but nothing is sent. Bookings never fail because of email.
+
+**What gets sent once it's on:**
+| When | Customer gets | Staff with "Booking alerts" on get |
+|---|---|---|
+| Customer books online | Confirmation email (+ text if they ticked "Text me") | Email (+ text to `STAFF_ALERT_PHONES`) |
+| Customer cancels | Cancellation email/text | Email/text |
+| Staff books, reschedules or cancels | Email/text, if "Let the customer know" was ticked | — |
+| 4 PM the day before | Reminder email/text | — |
+
+### 4a. Email sender: Resend (free tier)
+1. Sign up at **resend.com** → **Domains → Add domain** → `aardvarkgroom.com`.
+2. Resend shows a few DNS records (TXT and MX, usually on a `send` subdomain, plus a DKIM TXT). Add each one at **Porkbun → aardvarkgroom.com → DNS** exactly as shown. They don't affect the website or the existing records.
+3. Back in Resend, click **Verify**. It can take a few minutes to an hour.
+4. **API Keys → Create API key** (Sending access). Copy it; you'll paste it twice below.
+
+### 4b. Send Supabase's own emails through Resend
+Supabase's built-in sender only allows a few emails per hour.
+1. **Supabase → Authentication → Emails → SMTP Settings** → enable custom SMTP:
+   - Host `smtp.resend.com` · Port `465` · Username `resend` · Password = your Resend API key
+   - Sender email `hello@aardvarkgroom.com` · Sender name `Aardvark Pet Grooming`
+2. **Authentication → Emails → Templates:** for **Confirm signup**, **Reset password** and **Magic link**, paste the matching file from [`supabase/email-templates/`](supabase/email-templates/) so they carry your logo.
+
+### 4c. Deploy the notification sender
+1. **Supabase → Edge Functions → Deploy a new function → Via Editor**. Name it exactly `notify`.
+2. Replace the sample code with all of [`supabase/functions/notify/index.ts`](supabase/functions/notify/index.ts) and click **Deploy**.
+3. In the function's settings, **turn off JWT verification** ("Verify JWT"). The function checks its own secret instead.
+4. **Edge Functions → Secrets** (Manage secrets) → add:
+   - `NOTIFY_SECRET`: make up a long random password (e.g. from your password manager). You'll use it again in 4d.
+   - `RESEND_API_KEY`: your Resend key
+   - `NOTIFY_FROM`: `Aardvark Pet Grooming <hello@aardvarkgroom.com>`
+   - `NOTIFY_REPLY_TO`: the inbox where customer replies should go (e.g. your Gmail)
+
+### 4d. Connect the database to the sender
+1. **Database → Extensions:** enable **pg_net** and **pg_cron**.
+2. **SQL Editor**: run this with your project URL and the same `NOTIFY_SECRET`:
+   ```sql
+   select vault.create_secret('https://YOURPROJECT.supabase.co/functions/v1/notify', 'aardvark_notify_url');
+   select vault.create_secret('PASTE-THE-SAME-NOTIFY_SECRET', 'aardvark_notify_secret');
+
+   -- Day-before reminders at 4 PM Central (22:00 UTC; 5 PM during daylight saving)
+   select cron.schedule('aardvark-reminders', '0 22 * * *', $$select public.queue_reminders()$$);
+
+   -- Every 15 minutes, retry anything that didn't send
+   select cron.schedule('aardvark-retry', '*/15 * * * *', $$
+     select net.http_post(
+       url := (select decrypted_secret from vault.decrypted_secrets where name = 'aardvark_notify_url'),
+       headers := jsonb_build_object('Content-Type', 'application/json',
+                  'x-aardvark-secret', (select decrypted_secret from vault.decrypted_secrets where name = 'aardvark_notify_secret')),
+       body := '{"sweep": true}'::jsonb)
+   $$);
+   ```
+3. **Test:** make a booking on the app with your own email. Within a minute you should get the confirmation, and **Business → Recent notifications** should say **sent**. If it says **error**, the reason is shown next to it (most often an unverified Resend domain).
+
+### 4e. Text messages (optional, can come later)
+Texting US mobiles from a business number requires carrier registration (called **A2P 10DLC**), which takes from a few days to a couple of weeks, so start early.
+1. Sign up at **twilio.com**, buy a local (251) number, and complete **A2P 10DLC** registration for your business (brand + "customer care / appointment reminders" campaign).
+2. Add Edge Function secrets: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` (your Twilio number like `+12515550000`, or a Messaging Service SID starting `MG`).
+3. Optional: `STAFF_ALERT_PHONES` = `+12515550111,+12515550122` to text staff about each online booking.
+
+Customers only get texts if they ticked **"Text me appointment updates"** (or staff ticked "Customer agreed to get text updates"). Every text ends with "Reply STOP to opt out"; Twilio handles STOP automatically.
+
+---
+
+## 5. Go-live checklist
+
+**In the app (Business tab, owners):**
+- [ ] **Availability → Van base location**: set the real starting address. The service radius and drive times are measured from it.
+- [ ] **Availability → Working hours** and **Booking rules** (setup time, max stops per day, radius, trip fee).
+- [ ] **Services & prices**: final menu and prices.
+- [ ] **Availability → Remove sample data**.
+- [ ] **Team**: approve Jared (and Bryan, per your agreement); tick **Booking alerts** for whoever should get them.
+
+**In Supabase:**
+- [ ] Re-run the latest `schema.sql` (safe; keeps data).
+- [ ] Section 4 above: emails (and texts when ready).
+- [ ] **Authentication → Sign In / Providers**: sign-ups on, **Confirm email** on.
+- [ ] Upgrade to **Pro** before real customers rely on it (no pausing, daily backups).
+
+**Real-world test (on your phones):**
+- [ ] Guest booking at a real Mobile address using "Use my location": check the address, times, confirmation email and the booking on **Today**.
+- [ ] Create a customer account, cancel online, rebook in 3 taps.
+- [ ] Staff: **+ New booking** for a phone customer, **Reschedule**, **Cancel**, **Block time**.
+
+**Before advertising:**
+- [ ] Privacy policy, terms and cancellation policy pages (have a lawyer review). You collect addresses and phone numbers and send texts.
+- [ ] Grooming consent/waiver (matted pets, senior pets).
+- [ ] Legal opinion on Jared's prior clinic NDA (a launch gate in your Strategic Master Plan).
+- [ ] Move hosting to Cloudflare Pages (section 3).

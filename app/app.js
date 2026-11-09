@@ -90,7 +90,8 @@
     var done = D.appointments.filter(function (a) { return status(a) === "Done"; }).length;
     var total = D.appointments.reduce(function (s, a) { return s + a.price; }, 0);
     var next = D.appointments.find(function (a) { return status(a) !== "Done"; });
-    var schedule = '<section class="card">' +
+    var actions = '<div class="quick-actions"><a class="btn" href="#newbooking">+ New booking</a><a class="btn ghost" href="#block">Block time</a></div>';
+    var schedule = (Api.mode === "live" ? actions : "") + '<section class="card">' +
       '<div class="seg"><button class="on">Schedule</button><button data-week>Week</button></div>' +
       '<div class="day-summary"><div><b>' + D.appointments.length + "</b><small>stops</small></div><div><b>" + done + "</b><small>done</small></div><div><b>" + money(total) + "</b><small>booked</small></div></div>" +
       '<div class="list">' + (D.appointments.length ? D.appointments.map(apptRow).join("") : '<p class="muted pad center">No stops scheduled today.</p>') + "</div></section>";
@@ -210,6 +211,123 @@
     });
   }
 
+  /* ---------- staff: reschedule ---------- */
+  var TZ = "America/Chicago";
+  function tzFmt(d, o) { return new Intl.DateTimeFormat("en-US", Object.assign({ timeZone: TZ }, o)).format(d); }
+  function viewResched(id) {
+    var a = apptById(id); if (!a) return viewToday();
+    var group = D.appointments.filter(function (x) { return x.ref === a.ref && x.status !== "Done"; });
+    var dur = group.reduce(function (n, x) { return n + x.mins; }, 0);
+    var p = petById(a.petId);
+    setHeader("Reschedule", group.map(function (x) { return petById(x.petId).name; }).join(" & ") + " · " + dur + " min", "appt/" + id, "today");
+    if (a.lat == null) { view.innerHTML = '<section class="card"><p>This visit has no map location, so drive times can\'t be checked. Edit it in Supabase.</p></section>'; return; }
+    view.innerHTML = '<p class="muted pad center">Finding times that fit the route…</p>';
+    var picked = null, day = null;
+    Api.slots(a.lat, a.lng, dur, a.ref).then(function (slots) {
+      function render() {
+        if (!slots.length) { view.innerHTML = '<section class="card"><p class="muted">No open times in the booking window.</p></section>'; return; }
+        var days = {}; slots.forEach(function (t) { var k = tzFmt(t, { year: "numeric", month: "2-digit", day: "2-digit" }); (days[k] = days[k] || []).push(t); });
+        var keys = Object.keys(days); if (!day) day = keys[0];
+        view.innerHTML = '<section class="card"><p class="muted small" style="margin-top:0">Currently ' + fmtTime(a.time) + " today. Times shown fit the drive to and from the other stops.</p>" +
+          '<div class="days">' + keys.map(function (k) { var d0 = days[k][0];
+            return '<button class="day' + (k === day ? " on" : "") + '" data-day="' + k + '"><small>' + tzFmt(d0, { weekday: "short" }) + "</small><b>" + tzFmt(d0, { day: "numeric" }) + "</b><small>" + tzFmt(d0, { month: "short" }) + "</small><i>" + days[k].length + "</i></button>"; }).join("") + "</div>" +
+          '<div class="times">' + days[day].map(function (t) { return '<button class="time' + (picked && +picked === +t ? " on" : "") + '" data-t="' + t.toISOString() + '">' + tzFmt(t, { hour: "numeric", minute: "2-digit" }) + "</button>"; }).join("") + "</div>" +
+          '<label class="check" style="margin-top:14px"><input type="checkbox" data-notify checked> <span>Let ' + esc(p.owner || "the customer") + " know (email/text)</span></label>" +
+          '<button class="btn full" data-move' + (picked ? "" : " disabled") + ">" + (picked ? "Move to " + tzFmt(picked, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Pick a new time") + "</button></section>";
+        view.querySelectorAll("[data-day]").forEach(function (b) { b.onclick = function () { day = b.dataset.day; picked = null; render(); }; });
+        view.querySelectorAll("[data-t]").forEach(function (b) { b.onclick = function () { picked = new Date(b.dataset.t); render(); }; });
+        var mv = $("[data-move]");
+        if (mv) mv.onclick = function () {
+          mv.disabled = true;
+          Api.reschedule(a.ref, picked, $("[data-notify]").checked).then(function () {
+            toast("Moved to " + tzFmt(picked, { weekday: "short", hour: "numeric", minute: "2-digit" }) + ".");
+            return Api.load().then(function (d) { D = d; location.hash = "#today"; });
+          }).catch(function (e) { mv.disabled = false; fail(e); });
+        };
+      }
+      render();
+    }).catch(showError);
+  }
+
+  /* ---------- staff: block time ---------- */
+  function viewBlock() {
+    setHeader("Block time", "Hide times from online booking", "today", "today");
+    var vanId = D.van.id, todayStr = tzFmt(new Date(), { year: "numeric", month: "2-digit", day: "2-digit" }).replace(/(\d+)\/(\d+)\/(\d+)/, "$3-$1-$2");
+    var tom = new Date(Date.now() + 864e5), tomStr = tzFmt(tom, { year: "numeric", month: "2-digit", day: "2-digit" }).replace(/(\d+)\/(\d+)\/(\d+)/, "$3-$1-$2");
+    view.innerHTML = '<p class="muted pad center">Loading…</p>';
+    Api.timeOff(vanId).then(function (off) {
+      view.innerHTML = '<section class="card"><h2>Quick blocks</h2><div class="quick-blocks">' +
+        '<button class="btn ghost" data-q="rest">Rest of today</button><button class="btn ghost" data-q="am">Tomorrow morning</button>' +
+        '<button class="btn ghost" data-q="pm">Tomorrow afternoon</button><button class="btn ghost" data-q="day">All day tomorrow</button></div></section>' +
+        '<section class="card"><h2>Custom</h2><form class="off-form" data-off><label>Date<input type="date" name="d1" required value="' + todayStr + '"></label><label>Until (date)<input type="date" name="d2" required value="' + todayStr + '"></label>' +
+        '<label>From<input type="time" name="t1" value="12:00"></label><label>To<input type="time" name="t2" value="17:00"></label>' +
+        '<label class="wide">Reason (staff only)<input name="reason" maxlength="100" placeholder="e.g. Vet appointment, van repair"></label>' +
+        '<button class="btn full wide" type="submit">Block this time</button></form></section>' +
+        '<section class="card"><h2>Upcoming blocks</h2>' + (off.length ? off.map(function (o) {
+          return '<div class="off-row"><div><b>' + tzFmt(new Date(o.starts_at), { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + " – " + tzFmt(new Date(o.ends_at), { hour: "numeric", minute: "2-digit" }) +
+            "</b><small>" + esc(o.reason || "") + '</small></div><button class="pill ghost" data-del="' + o.id + '">Remove</button></div>'; }).join("") : '<p class="muted">Nothing blocked.</p>') +
+        '<p class="muted small">Existing visits aren\'t moved. Blocks only stop new bookings in that time.</p></section>';
+      function add(d1, t1, d2, t2, reason) {
+        var a = zoned(d1, t1, TZ), b = zoned(d2, t2, TZ);
+        if (!(b > a)) return toast("The end must be after the start.");
+        Api.addTimeOff({ van_id: vanId, starts_at: a.toISOString(), ends_at: b.toISOString(), reason: reason || null })
+          .then(function () { toast("Blocked. Customers won't see those times."); viewBlock(); }).catch(fail);
+      }
+      view.querySelectorAll("[data-q]").forEach(function (b) {
+        b.onclick = function () {
+          var q = b.dataset.q, nowT = tzFmt(new Date(), { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+          if (q === "rest") add(todayStr, nowT, todayStr, "23:59", "Blocked rest of day");
+          if (q === "am") add(tomStr, "00:00", tomStr, "12:00", "Blocked morning");
+          if (q === "pm") add(tomStr, "12:00", tomStr, "23:59", "Blocked afternoon");
+          if (q === "day") add(tomStr, "00:00", tomStr, "23:59", "Blocked all day");
+        };
+      });
+      $("[data-off]").onsubmit = function (e) { e.preventDefault(); var f = e.target; add(f.d1.value, f.t1.value || "00:00", f.d2.value, f.t2.value || "23:59", f.reason.value.trim()); };
+      view.querySelectorAll("[data-del]").forEach(function (b) { b.onclick = function () { Api.deleteTimeOff(b.dataset.del).then(function () { toast("Removed."); viewBlock(); }).catch(fail); }; });
+    }).catch(showError);
+  }
+
+  /* ---------- owner: services & prices ---------- */
+  function viewServices() {
+    setHeader("Services & prices", "What customers can book", "more", "more");
+    if (Api.mode !== "live" || !Api.staff || Api.staff.role !== "owner") { view.innerHTML = '<section class="card"><p class="muted">Only owners can edit services.</p></section>'; return; }
+    view.innerHTML = '<p class="muted pad center">Loading…</p>';
+    Api.allServices().then(function (list) {
+      function row(sv) {
+        return '<form class="card svc-edit" data-id="' + esc(sv.id) + '"><div class="svc-edit-head"><b>' + esc(sv.name) + "</b>" + (sv.is_addon ? '<span class="tag">Add-on</span>' : "") +
+          '<label class="check"><input type="checkbox" name="active"' + (sv.active ? " checked" : "") + "> <span>Bookable</span></label></div>" +
+          '<label>Name<input name="name" value="' + esc(sv.name) + '" maxlength="80"></label>' +
+          '<label>Description<input name="description" value="' + esc(sv.description || "") + '" maxlength="200"></label>' +
+          '<div class="row3"><label>Price ($)<input name="price" type="number" min="0" step="0.01" value="' + Number(sv.price) + '"></label>' +
+          '<label>Minutes<input name="duration_min" type="number" min="5" max="480" value="' + sv.duration_min + '"></label>' +
+          '<label>For<select name="species">' + ["Dog", "Cat", "Any"].map(function (x) { return "<option" + (sv.species === x ? " selected" : "") + ">" + x + "</option>"; }).join("") + "</select></label></div>" +
+          (sv.is_addon ? "" : '<div class="row2"><label>Min weight (lb)<input name="min_weight" type="number" min="0" value="' + (sv.min_weight == null ? "" : Number(sv.min_weight)) + '"></label><label>Max weight (lb)<input name="max_weight" type="number" min="0" value="' + (sv.max_weight == null ? "" : Number(sv.max_weight)) + '"></label></div>') +
+          '<button class="btn ghost full" type="submit">Save</button></form>';
+      }
+      view.innerHTML = '<p class="muted small">Changes show on the booking page right away. Untick “Bookable” to hide a service.</p>' + list.map(row).join("") +
+        '<form class="card svc-edit" data-new><h2>Add a service</h2><label>Name<input name="name" required maxlength="80" placeholder="e.g. Puppy intro groom"></label>' +
+        '<label>Description<input name="description" maxlength="200"></label><div class="row3"><label>Price ($)<input name="price" type="number" min="0" step="0.01" required></label>' +
+        '<label>Minutes<input name="duration_min" type="number" min="5" max="480" required></label><label>For<select name="species"><option>Dog</option><option>Cat</option><option>Any</option></select></label></div>' +
+        '<label class="check"><input type="checkbox" name="is_addon"> <span>This is an add-on</span></label><button class="btn full" type="submit">Add service</button></form>';
+      view.querySelectorAll("form.svc-edit[data-id]").forEach(function (f) {
+        f.onsubmit = function (e) {
+          e.preventDefault();
+          var num = function (n) { var v = f[n] ? f[n].value : ""; return v === "" ? null : Number(v); };
+          var patch = { name: f.name.value.trim(), description: f.description.value.trim(), price: num("price"), duration_min: num("duration_min"), species: f.species.value, active: f.active.checked };
+          if (f.min_weight) { patch.min_weight = num("min_weight"); patch.max_weight = num("max_weight"); }
+          Api.saveService(f.dataset.id, patch).then(function () { toast("Saved."); }).catch(fail);
+        };
+      });
+      $("form[data-new]").onsubmit = function (e) {
+        e.preventDefault(); var f = e.target;
+        var id = (f.is_addon.checked ? "addon-" : "") + f.name.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+        Api.addService({ id: id, name: f.name.value.trim(), description: f.description.value.trim(), price: Number(f.price.value), duration_min: Number(f.duration_min.value),
+                         species: f.species.value, is_addon: f.is_addon.checked, sort: list.length * 10 + 10 })
+          .then(function () { toast("Service added."); viewServices(); }).catch(fail);
+      };
+    }).catch(showError);
+  }
+
   /* ---------- owner: availability ---------- */
   var DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   function zoned(dateStr, timeStr, tz) {
@@ -253,10 +371,16 @@
         '<label>Start time<input type="time" name="t1" value="00:00"></label><label>End time<input type="time" name="t2" value="23:59"></label>' +
         '<label class="wide">Reason (staff only)<input name="reason" maxlength="100" placeholder="e.g. Van service, vacation"></label>' +
         '<button class="btn ghost full wide" type="submit">Add time off</button></form></section>' +
+        '<section class="card"><div class="card-head"><h2>Van base location</h2></div><p class="muted small" style="margin-top:0">Where ' + esc(van.name) + ' starts from. The service radius is measured from here.</p>' +
+        '<div class="addr"><input class="search" data-base-q placeholder="Search the base address"><ul class="addr-list" data-base-list hidden></ul></div>' +
+        '<button class="btn ghost full" data-base-gps>Use my current location</button><div class="map base-map" id="base-map"></div>' +
+        '<p class="muted small" data-base-note>' + (van.depot_lat != null ? "Drag the pin to fine-tune, then save." : "No base set yet.") + '</p><button class="btn full" data-base-save disabled>Save base location</button></section>' +
         '<section class="card"><div class="card-head"><h2>Booking rules</h2></div><form class="rules" data-rules>' +
         rules.map(function (r) { return "<label>" + r[1] + '<input name="' + r[0] + '" type="number" step="any" min="0" value="' + (st[r[0]] != null ? Number(st[r[0]]) : "") + '"></label>'; }).join("") +
         '</form><p class="muted small">Drive time between stops is estimated from GPS distance × road factor ÷ speed, plus setup time. Customers only see times that fit.</p>' +
-        '<button class="btn full" data-save-rules>Save rules</button></section>';
+        '<button class="btn full" data-save-rules>Save rules</button></section>' +
+        '<section class="card"><h2>Sample data</h2><p class="muted small" style="margin-top:0">Remove the 7 sample clients (Luna, Mochi, Harper…) and their appointments before taking real bookings, so they don\'t block real times.</p>' +
+        '<button class="btn ghost full danger" data-remove-sample>Remove sample data</button></section>';
 
       document.querySelectorAll(".hours-row input[type=checkbox]").forEach(function (cb) {
         cb.onchange = function () { cb.closest(".hours-row").querySelectorAll("input[type=time]").forEach(function (t) { t.disabled = !cb.checked; }); };
@@ -281,6 +405,37 @@
         Api.addTimeOff({ van_id: van.id, starts_at: a.toISOString(), ends_at: b2.toISOString(), reason: f.reason.value.trim() || null })
           .then(function () { toast("Time off added. Those times are now hidden from customers."); viewAvailability(); }).catch(fail);
       };
+      // Base location picker
+      var base = van.depot_lat != null ? { lat: van.depot_lat, lng: van.depot_lng } : { lat: 30.6954, lng: -88.0399 };
+      if (activeMap) { activeMap.remove(); activeMap = null; }
+      var bm = L.map("base-map", { zoomControl: true }).setView([base.lat, base.lng], van.depot_lat != null ? 15 : 11);
+      activeMap = bm;
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(bm);
+      var mk = L.marker([base.lat, base.lng], { draggable: true, icon: L.divIcon({ className: "pin depot", html: icon("route"), iconSize: [30, 30] }) }).addTo(bm);
+      var saveBtn = $("[data-base-save]"), note = $("[data-base-note]");
+      function moved(lat, lng, label) { base = { lat: lat, lng: lng }; mk.setLatLng([lat, lng]); bm.setView([lat, lng], 16); saveBtn.disabled = false; note.textContent = (label ? label + " · " : "") + "Drag the pin to fine-tune, then save."; }
+      mk.on("dragend", function () { var ll = mk.getLatLng(); moved(ll.lat, ll.lng); });
+      setTimeout(function () { bm.invalidateSize(); }, 60);
+      var bq = $("[data-base-q]"), bl = $("[data-base-list]"), bt = null;
+      bq.oninput = function () {
+        clearTimeout(bt);
+        bt = setTimeout(function () {
+          Geo.search(bq.value).then(function (pl) {
+            bl.innerHTML = pl.map(function (x, i) { return '<li><button type="button" data-i="' + i + '">' + esc(x.label) + "</button></li>"; }).join(""); bl.hidden = !pl.length;
+            bl.querySelectorAll("button").forEach(function (b) { b.onclick = function () { var x = pl[+b.dataset.i]; bl.hidden = true; bq.value = x.label; moved(x.lat, x.lng, x.label); }; });
+          }).catch(function () {});
+        }, 350);
+      };
+      $("[data-base-gps]").onclick = function () { Geo.locate().then(function (x) { moved(x.lat, x.lng, "Your location"); }).catch(function (e) { toast(e.message); }); };
+      saveBtn.onclick = function () {
+        saveBtn.disabled = true;
+        Api.saveVan(van.id, { depot_lat: +base.lat.toFixed(6), depot_lng: +base.lng.toFixed(6) })
+          .then(function () { toast("Base location saved."); D.van.depot = { lat: base.lat, lng: base.lng }; }).catch(function (e) { saveBtn.disabled = false; fail(e); });
+      };
+      $("[data-remove-sample]").onclick = function () {
+        if (!confirm("Remove all sample clients, pets and their appointments? Real data isn't touched.")) return;
+        Api.removeSampleData().then(function (n) { toast("Removed " + n + " sample clients."); return Api.load().then(function (d) { D = d; }); }).catch(fail);
+      };
       $("[data-save-rules]").onclick = function () {
         var patch = {};
         rules.forEach(function (r) { var v = $('[data-rules] [name="' + r[0] + '"]').value; if (v !== "") patch[r[0]] = Number(v); });
@@ -304,7 +459,23 @@
       '<a class="act" target="_blank" rel="noopener" href="' + directionsUrl([a]) + '">' + icon("nav") + "Navigate</a></div>" +
       '<section class="card"><dl class="facts"><dt>Service</dt><dd>' + esc(a.service) + "</dd><dt>Price</dt><dd>" + money(a.price) + "</dd><dt>Est. time</dt><dd>" + a.mins + " min</dd><dt>Coat</dt><dd>" + esc(p.coat) + "</dd><dt>Owner</dt><dd>" + esc(p.owner) + "</dd><dt>Area</dt><dd>" + esc(p.area) + "</dd></dl>" +
       '<div class="note"><b>Groomer notes</b><p>' + esc(p.notes) + "</p></div>" +
-      '<a href="#pet/' + p.id + '" class="link">Full pet record ›</a></section>';
+      '<a href="#pet/' + p.id + '" class="link">Full pet record ›</a></section>' +
+      (a.notes ? '<section class="card"><p class="label" style="margin-top:0">Customer notes</p><p>' + esc(a.notes) + "</p></section>" : "") +
+      (Api.mode === "live" && s !== "Done" && s !== "Cancelled"
+        ? '<section class="card change"><h2>Change this visit</h2><div class="row2"><a class="btn ghost" href="#resched/' + a.id + '">Reschedule</a>' +
+          '<button class="btn ghost danger" data-cancel-visit>Cancel visit</button></div>' +
+          '<div class="confirm-cancel" hidden><label class="check"><input type="checkbox" data-notify checked> <span>Let ' + esc(p.owner || "the customer") + " know (email/text)</span></label>" +
+          '<button class="btn full danger-solid" data-confirm-cancel>Yes, cancel this visit</button></div></section>' : "");
+    var cv = $("[data-cancel-visit]");
+    if (cv) cv.onclick = function () { $(".confirm-cancel").hidden = false; cv.disabled = true; };
+    var cc = $("[data-confirm-cancel]");
+    if (cc) cc.onclick = function () {
+      cc.disabled = true;
+      Api.staffCancel(a.ref, $("[data-notify]").checked).then(function () {
+        toast(p.name + "'s visit is cancelled.");
+        return Api.load().then(function (d) { D = d; location.hash = "#today"; });
+      }).catch(function (e) { cc.disabled = false; fail(e); });
+    };
     var adv = $("[data-advance]");
     if (adv) adv.onclick = function () {
       adv.disabled = true;
@@ -405,12 +576,25 @@
       '<section class="card"><h2>Unit economics</h2><dl class="facts"><dt>Average ticket</dt><dd>' + money(avg) + "</dd><dt>Rebook rate</dt><dd>" + W.rebookRate + "%</dd><dt>Grooms / day</dt><dd>" + (W.bookings / 5).toFixed(1) + "</dd><dt>Drive time today</dt><dd>" + D.appointments.reduce(function (s, a) { return s + a.drive; }, 0) + " min</dd></dl></section></div>" +
       (MOBILE && !standalone ? '<section class="card"><h2>Get the app</h2><p class="muted">On iPhone: open this page in Safari, tap Share, then <b>Add to Home Screen</b>. On Android: tap <b>Install app</b> in Chrome\'s menu.</p><button class="btn ghost" data-install-again>Install Aardvark</button></section>' : "") +
       (Api.mode === "live" && Api.staff.role === "owner"
-        ? '<a class="card team-link" href="#availability"><span><b>Availability</b><small class="muted">Working hours, time off, booking rules</small></span>' + icon("chev", "chev") + "</a>" +
+        ? '<a class="card team-link" href="#availability"><span><b>Availability</b><small class="muted">Hours, time off, base location, booking rules</small></span>' + icon("chev", "chev") + "</a>" +
+          '<a class="card team-link" href="#services"><span><b>Services &amp; prices</b><small class="muted">What customers can book online</small></span>' + icon("chev", "chev") + "</a>" +
           '<a class="card team-link" href="#team"><span><b>Team</b><small class="muted">Approve new staff, set roles</small></span>' + icon("chev", "chev") + "</a>" : "") +
       (Api.mode === "live"
         ? '<section class="card"><h2>Account</h2><dl class="facts"><dt>Signed in</dt><dd>' + esc(Api.user.email || "") + "</dd><dt>Role</dt><dd>" + esc(Api.staff.role) + '</dd></dl><button class="btn ghost full" data-signout>Sign out</button></section>'
         : '<p class="muted center small">Demo mode · sample data · <a href="../">Aardvark website</a></p>');
     var ia = $("[data-install-again]"); if (ia) ia.onclick = promptInstall;
+    if (Api.mode === "live" && Api.staff.role === "owner") {
+      var box = document.createElement("section"); box.className = "card"; box.innerHTML = '<h2>Recent notifications</h2><p class="muted small">Loading…</p>';
+      var acct = view.querySelector("[data-signout]"); (acct ? acct.closest(".card") : view.lastChild).insertAdjacentElement("beforebegin", box);
+      Api.recentNotifications().then(function (list) {
+        var label = { booking_confirmed: "Booked", booking_cancelled: "Cancelled", booking_rescheduled: "Rescheduled", reminder: "Reminder" };
+        box.innerHTML = "<h2>Recent notifications</h2>" + (list.length ? list.map(function (n) {
+          var chip = n.status === "sent" ? "chip-confirmed" : n.status === "queued" ? "chip-on-the-way" : n.status === "skipped" ? "chip-done" : "chip-due";
+          return '<div class="off-row"><div><b>' + (label[n.kind] || n.kind) + "</b> <small>" + new Date(n.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) +
+            (n.last_error ? " · " + esc(n.last_error) : "") + '</small></div><span class="chip ' + chip + '">' + n.status + "</span></div>";
+        }).join("") + '<p class="muted small">“queued” means email/texts aren\'t connected yet. See SETUP.md, step 2.</p>' : '<p class="muted">None yet.</p>');
+      }).catch(function () { box.remove(); });
+    }
     var so = $("[data-signout]");
     if (so) so.onclick = function () { Api.signOut().then(function () { location.hash = "#welcome"; toPublic(); }); };
   }
@@ -431,6 +615,7 @@
           '<div class="member-actions"><select data-role aria-label="Role"' + (me ? " disabled" : "") + ">" +
           ROLES.map(function (r) { return '<option value="' + r[0] + '"' + (m.role === r[0] ? " selected" : "") + ">" + r[1] + "</option>"; }).join("") + "</select>" +
           (m.active ? (me ? "" : '<button class="pill ghost" data-off>Switch off</button>') : '<button class="pill" data-approve>Approve</button>') +
+          (m.active ? '<label class="check small-check"><input type="checkbox" data-alerts' + (m.alerts !== false ? " checked" : "") + "> <span>Booking alerts</span></label>" : "") +
           "</div></div></div>";
       }
       view.innerHTML =
@@ -447,6 +632,8 @@
         var sel = el.querySelector("[data-role]"), ap = el.querySelector("[data-approve]"), off = el.querySelector("[data-off]");
         if (sel && !sel.disabled) sel.onchange = function () { save({ role: sel.value }, (m.full_name || "Role") + " is now " + sel.options[sel.selectedIndex].text.toLowerCase() + "."); };
         if (ap) ap.onclick = function () { save({ active: true, role: sel.value }, (m.full_name || "They") + " can sign in now."); };
+        var al = el.querySelector("[data-alerts]");
+        if (al) al.onchange = function () { save({ alerts: al.checked }, al.checked ? "Booking alerts on." : "Booking alerts off."); };
         if (off) off.onclick = function () { if (confirm("Switch off " + (m.full_name || m.email) + "? They won't see any data until approved again.")) save({ active: false }, "Switched off."); };
       });
     }).catch(showError);
@@ -463,7 +650,7 @@
       return;
     }
     if (!h[0] || PUBLIC_ROUTES.indexOf(h[0]) > -1) h = ["today"];
-    if (activeMap && !(h[0] === "today" || h[0] === "route")) { activeMap.remove(); activeMap = null; }
+    if (activeMap && !(h[0] === "today" || h[0] === "route" || h[0] === "availability")) { activeMap.remove(); activeMap = null; }
     switch (h[0]) {
       case "route": viewRoute(); break;
       case "appt": viewAppt(h[1]); break;
@@ -474,6 +661,10 @@
       case "more": viewMore(); break;
       case "team": viewTeam(); break;
       case "availability": viewAvailability(); break;
+      case "services": viewServices(); break;
+      case "resched": viewResched(h[1]); break;
+      case "block": viewBlock(); break;
+      case "newbooking": Book.staffFlow(true); break;
       default: viewToday();
     }
     view.scrollTop = 0; window.scrollTo(0, 0);

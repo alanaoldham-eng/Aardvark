@@ -426,7 +426,10 @@ returns int language sql stable set search_path = public as $$
 $$;
 
 -- Can van v take a job of dur minutes at time t, at this location?
-create or replace function public.slot_is_free(v text, t timestamptz, dur int, p_lat float8, p_lng float8)
+-- p_exclude: a booking (or appointment) to ignore, used when rescheduling it.
+-- p_ignore_lead: staff may book inside the usual advance-notice window.
+create or replace function public.slot_is_free_ex(v text, t timestamptz, dur int, p_lat float8, p_lng float8,
+                                                  p_exclude uuid default null, p_ignore_lead boolean default false)
 returns boolean language plpgsql stable security definer set search_path = public as $$
 declare
   st public.booking_settings;
@@ -438,7 +441,8 @@ declare
   gap int;
 begin
   select * into st from public.booking_settings where id = 1;
-  if t < now() + make_interval(hours => st.lead_time_hours) then return false; end if;
+  if t < now() then return false; end if;
+  if not p_ignore_lead and t < now() + make_interval(hours => st.lead_time_hours) then return false; end if;
   local_day := (t at time zone st.timezone)::date;
   select * into h from public.van_hours where van_id = v and weekday = extract(dow from local_day)::int;
   if not found then return false; end if;
@@ -454,10 +458,12 @@ begin
   if (select count(distinct (round(a.lat::numeric, 4), round(a.lng::numeric, 4)))
         from public.appointments a
        where a.van_id = v and a.status <> 'Cancelled'
+         and (p_exclude is null or (a.id <> p_exclude and a.booking_id is distinct from p_exclude))
          and a.starts_at >= win_start and a.starts_at < win_end)
      >= st.max_stops_per_day
      and not exists (select 1 from public.appointments a
                       where a.van_id = v and a.status <> 'Cancelled'
+         and (p_exclude is null or (a.id <> p_exclude and a.booking_id is distinct from p_exclude))
                         and a.starts_at >= win_start and a.starts_at < win_end
                         and public.travel_minutes(a.lat, a.lng, p_lat, p_lng) = 0) then
     return false;
@@ -466,6 +472,7 @@ begin
   -- No overlap with another job
   if exists (select 1 from public.appointments a
               where a.van_id = v and a.status <> 'Cancelled'
+         and (p_exclude is null or (a.id <> p_exclude and a.booking_id is distinct from p_exclude))
                 and a.starts_at < e and a.starts_at + make_interval(mins => a.duration_min) > t) then
     return false;
   end if;
@@ -474,6 +481,7 @@ begin
   select a.lat, a.lng, a.starts_at + make_interval(mins => a.duration_min) as ends_at into prev
     from public.appointments a
    where a.van_id = v and a.status <> 'Cancelled'
+         and (p_exclude is null or (a.id <> p_exclude and a.booking_id is distinct from p_exclude))
      and a.starts_at >= win_start and a.starts_at + make_interval(mins => a.duration_min) <= t
    order by a.starts_at + make_interval(mins => a.duration_min) desc limit 1;
   if found then
@@ -486,6 +494,7 @@ begin
   select a.lat, a.lng, a.starts_at into nxt
     from public.appointments a
    where a.van_id = v and a.status <> 'Cancelled'
+         and (p_exclude is null or (a.id <> p_exclude and a.booking_id is distinct from p_exclude))
      and a.starts_at >= e and a.starts_at < win_end
    order by a.starts_at asc limit 1;
   if found then
@@ -496,6 +505,11 @@ begin
 
   return true;
 end $$;
+
+create or replace function public.slot_is_free(v text, t timestamptz, dur int, p_lat float8, p_lng float8)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.slot_is_free_ex(v, t, dur, p_lat, p_lng, null, false);
+$$;
 
 -- Is this location inside the service area? Returns distance to the nearest van base.
 create or replace function public.check_service_area(p_lat float8, p_lng float8)
@@ -510,12 +524,15 @@ $$;
 
 -- Bookable start times for a job of dur minutes at a location (any van).
 -- Only times are returned — never other customers' details.
-create or replace function public.get_available_slots(p_lat float8, p_lng float8, p_dur int, p_from date default null, p_days int default null)
+drop function if exists public.get_available_slots(float8, float8, int, date, int);
+create or replace function public.get_available_slots(p_lat float8, p_lng float8, p_dur int, p_from date default null,
+                                                      p_days int default null, p_exclude uuid default null)
 returns table (slot timestamptz) language plpgsql stable security definer set search_path = public as $$
 declare
   st public.booking_settings;
   d date; v record; h public.van_hours; t timestamptz; win_end timestamptz;
   from_d date; n_days int;
+  staff boolean := public.is_staff();
 begin
   select * into st from public.booking_settings where id = 1;
   if p_dur is null or p_dur < 5 or p_dur > 480 then raise exception 'Invalid duration'; end if;
@@ -531,7 +548,7 @@ begin
       t := (d + h.start_time) at time zone st.timezone;
       win_end := (d + h.end_time) at time zone st.timezone;
       while t + make_interval(mins => p_dur) <= win_end loop
-        if public.slot_is_free(v.id, t, p_dur, p_lat, p_lng) then
+        if public.slot_is_free_ex(v.id, t, p_dur, p_lat, p_lng, case when staff then p_exclude end, staff) then
           slot := t; return next;
         end if;
         t := t + make_interval(mins => st.slot_step_min);
@@ -548,6 +565,7 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare
   st public.booking_settings;
   uid uuid := auth.uid();
+  staff boolean := public.is_staff();   -- staff booking on a customer's behalf (phone bookings)
   t timestamptz := (p->>'starts_at')::timestamptz;
   v_lat float8 := (p->'address'->>'lat')::float8;
   v_lng float8 := (p->'address'->>'lng')::float8;
@@ -566,7 +584,8 @@ begin
   if t is null or v_lat is null or v_lng is null then raise exception 'Please choose a time and confirm your address.'; end if;
   if coalesce(cname, '') = '' then raise exception 'Please enter your name.'; end if;
   if coalesce(cphone, '') = '' or length(regexp_replace(cphone, '\D', '', 'g')) < 10 then raise exception 'Please enter a phone number we can text on the day.'; end if;
-  if coalesce(cemail, '') !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Please enter a valid email.'; end if;
+  if staff and coalesce(cemail, '') = '' then cemail := null;
+  elsif coalesce(cemail, '') !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Please enter a valid email.'; end if;
   if jsonb_typeof(p->'pets') <> 'array' or jsonb_array_length(p->'pets') not between 1 and 4 then
     raise exception 'Choose between 1 and 4 pets.';
   end if;
@@ -591,14 +610,26 @@ begin
   -- One booking at a time, so the availability check below can't race
   perform pg_advisory_xact_lock(hashtext('aardvark-booking'));
   select id into vid from public.vans
-   where active and public.slot_is_free(id, t, total_dur, v_lat, v_lng) order by id limit 1;
+   where active and public.slot_is_free_ex(id, t, total_dur, v_lat, v_lng, null, staff) order by id limit 1;
   if vid is null then raise exception 'Sorry, that time was just taken. Please pick another time.'; end if;
 
   -- Find or create the client
-  if uid is not null then
+  if staff then
+    -- Staff: use the chosen client, or match an existing client by phone (and email when given)
+    uid := null;
+    if p ? 'client_id' then
+      select id into cid from public.clients where id = (p->>'client_id')::uuid;
+    end if;
+    if cid is null then
+      select id into cid from public.clients
+       where regexp_replace(coalesce(phone, ''), '\D', '', 'g') = regexp_replace(cphone, '\D', '', 'g')
+         and (cemail is null or email is null or lower(email) = cemail)
+       order by created_at desc limit 1;
+    end if;
+  elsif uid is not null then
     select id into cid from public.clients where user_id = uid;
   end if;
-  if cid is null and uid is null then
+  if cid is null and uid is null and not staff then
     -- Guests: reuse a guest record only when both email and phone match; never edit it
     select id into cid from public.clients
      where user_id is null and lower(email) = cemail
@@ -627,7 +658,7 @@ begin
   cursor_t := t;
   for item in select * from jsonb_array_elements(plan) loop
     pet := item->'pet'; pid := null;
-    if pet ? 'pet_id' and uid is not null then
+    if pet ? 'pet_id' and (uid is not null or staff) then
       select pp.id into pid from public.pets pp where pp.id = (pet->>'pet_id')::uuid and pp.client_id = cid;
     end if;
     if pid is null then
@@ -646,6 +677,13 @@ begin
     ids := ids || new_id;
     cursor_t := cursor_t + make_interval(mins => (item->>'dur')::int);
   end loop;
+
+  if coalesce((p->>'sms_opt_in')::boolean, false) then
+    update public.clients set sms_opt_in = true where id = cid;
+  end if;
+  perform public.queue_notification('booking_confirmed', bid,
+    jsonb_build_object('by', case when staff then 'staff' else 'customer' end,
+                       'notify_customer', coalesce((p->>'notify_customer')::boolean, true)));
 
   return jsonb_build_object('booking_id', bid, 'starts_at', t, 'ends_at', cursor_t,
                             'total', total_price, 'duration_min', total_dur, 'appointments', to_jsonb(ids));
@@ -667,6 +705,7 @@ begin
   update public.appointments a set status = 'Cancelled'
     from public.pets p, public.clients c
    where a.booking_id = b and p.id = a.pet_id and c.id = p.client_id and c.user_id = auth.uid();
+  perform public.queue_notification('booking_cancelled', b, jsonb_build_object('by', 'customer', 'notify_customer', true));
 end $$;
 
 -- ---------- Access for booking ----------
@@ -681,12 +720,14 @@ grant all on public.services, public.booking_settings, public.van_hours, public.
 grant execute on function public.gps_miles(float8, float8, float8, float8),
                           public.travel_minutes(float8, float8, float8, float8),
                           public.check_service_area(float8, float8),
-                          public.get_available_slots(float8, float8, int, date, int),
+                          public.get_available_slots(float8, float8, int, date, int, uuid),
                           public.book_appointment(jsonb)
   to anon, authenticated, service_role;
 grant execute on function public.cancel_my_booking(uuid) to authenticated, service_role;
 revoke execute on function public.slot_is_free(text, timestamptz, int, float8, float8) from public, anon;
 grant execute on function public.slot_is_free(text, timestamptz, int, float8, float8) to authenticated, service_role;
+revoke execute on function public.slot_is_free_ex(text, timestamptz, int, float8, float8, uuid, boolean) from public, anon;
+grant execute on function public.slot_is_free_ex(text, timestamptz, int, float8, float8, uuid, boolean) to authenticated, service_role;
 
 drop policy if exists "public reads services" on public.services;
 create policy "public reads services" on public.services for select to anon, authenticated using (active or public.is_staff());
@@ -707,6 +748,9 @@ begin
     execute format('drop policy if exists "%1$s owner write" on public.%1$I', t);
     execute format('create policy "%1$s owner write" on public.%1$I for all to authenticated using (public.is_owner()) with check (public.is_owner())', t);
   end loop;
+  -- Groomers can block their own time too (e.g. "block this afternoon")
+  drop policy if exists "time_off staff write" on public.time_off;
+  create policy "time_off staff write" on public.time_off for all to authenticated using (public.is_staff()) with check (public.is_staff());
 end $$;
 
 -- Customers see (and edit) only their own records
@@ -728,3 +772,182 @@ drop policy if exists "customer reads own appointments" on public.appointments;
 create policy "customer reads own appointments" on public.appointments for select to authenticated
   using (exists (select 1 from public.pets p join public.clients c on c.id = p.client_id
                   where p.id = appointments.pet_id and c.user_id = auth.uid()));
+
+
+-- =====================================================================
+-- NOTIFICATIONS + STAFF BOOKING TOOLS
+-- Every booking change adds one row to `notifications`. If the sender is
+-- connected (see SETUP.md: Edge Function + two Vault secrets), a trigger
+-- calls it straight away; otherwise rows simply wait, and nothing breaks.
+-- =====================================================================
+
+alter table public.clients add column if not exists sms_opt_in boolean not null default false;
+alter table public.staff   add column if not exists alerts boolean not null default true;   -- email me new bookings / cancellations
+
+create table if not exists public.notifications (
+  id          uuid primary key default gen_random_uuid(),
+  created_at  timestamptz not null default now(),
+  kind        text not null check (kind in ('booking_confirmed', 'booking_cancelled', 'booking_rescheduled', 'reminder')),
+  booking_ref uuid not null,               -- booking_id, or the appointment id for single staff-made appointments
+  meta        jsonb not null default '{}'::jsonb,
+  status      text not null default 'queued' check (status in ('queued', 'sent', 'partial', 'skipped', 'error')),
+  attempts    int not null default 0,
+  last_error  text,
+  sent_at     timestamptz
+);
+create index if not exists notifications_ref_idx on public.notifications(booking_ref, kind);
+alter table public.notifications enable row level security;
+grant select on public.notifications to authenticated;
+grant all on public.notifications to service_role;
+drop policy if exists "owner reads notifications" on public.notifications;
+create policy "owner reads notifications" on public.notifications for select to authenticated using (public.is_owner());
+
+create or replace function public.queue_notification(p_kind text, p_ref uuid, p_meta jsonb default '{}'::jsonb)
+returns uuid language sql volatile security definer set search_path = public as $$
+  insert into public.notifications (kind, booking_ref, meta) values (p_kind, p_ref, coalesce(p_meta, '{}'::jsonb)) returning id;
+$$;
+
+-- Call the Edge Function when a notification is queued (only if it's been connected)
+create or replace function public.notifications_dispatch() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare url text; secret text;
+begin
+  begin
+    select decrypted_secret into url    from vault.decrypted_secrets where name = 'aardvark_notify_url'    limit 1;
+    select decrypted_secret into secret from vault.decrypted_secrets where name = 'aardvark_notify_secret' limit 1;
+  exception when others then
+    return new;     -- Vault not available: leave it queued
+  end;
+  if url is null or secret is null then return new; end if;
+  begin
+    perform net.http_post(url := url,
+                          headers := jsonb_build_object('Content-Type', 'application/json', 'x-aardvark-secret', secret),
+                          body := jsonb_build_object('id', new.id));
+  exception when others then
+    null;           -- pg_net not enabled: leave it queued; a booking must never fail because of email
+  end;
+  return new;
+end $$;
+
+drop trigger if exists notifications_dispatch on public.notifications;
+create trigger notifications_dispatch after insert on public.notifications
+  for each row execute function public.notifications_dispatch();
+
+-- Everything the sender needs for one notification (service role only)
+create or replace function public.get_notification(p_id uuid)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare n public.notifications; out jsonb;
+begin
+  select * into n from public.notifications where id = p_id;
+  if not found then return null; end if;
+  select jsonb_build_object(
+    'id', n.id, 'kind', n.kind, 'status', n.status, 'meta', n.meta, 'booking_ref', n.booking_ref,
+    'timezone', (select timezone from public.booking_settings where id = 1),
+    'starts_at', min(a.starts_at),
+    'ends_at', max(a.starts_at + make_interval(mins => a.duration_min)),
+    'address', min(a.address),
+    'notes', min(a.customer_notes),
+    'total', sum(a.price),
+    'status_now', min(a.status),
+    'source', min(a.source),
+    'customer', (select jsonb_build_object('name', c.name, 'email', c.email, 'phone', c.phone, 'sms_opt_in', c.sms_opt_in)
+                   from public.clients c where c.id = min(p.client_id::text)::uuid),
+    'items', jsonb_agg(jsonb_build_object('pet', p.name, 'service', a.service, 'price', a.price,
+                                          'starts_at', a.starts_at) order by a.starts_at),
+    'staff', (select coalesce(jsonb_agg(jsonb_build_object('name', st.full_name, 'email', st.email)), '[]'::jsonb)
+                from public.staff st where st.active and st.alerts and st.role in ('owner', 'groomer') and st.email is not null)
+  ) into out
+  from public.appointments a join public.pets p on p.id = a.pet_id
+  where a.booking_id = n.booking_ref or a.id = n.booking_ref;
+  return out;
+end $$;
+
+create or replace function public.mark_notification(p_id uuid, p_status text, p_error text default null)
+returns void language sql volatile security definer set search_path = public as $$
+  update public.notifications
+     set status = p_status, last_error = p_error, attempts = attempts + 1,
+         sent_at = case when p_status in ('sent', 'partial') then now() else sent_at end
+   where id = p_id;
+$$;
+
+-- Queue tomorrow's reminders (run daily by pg_cron; safe to run more than once)
+create or replace function public.queue_reminders()
+returns int language plpgsql volatile security definer set search_path = public as $$
+declare st public.booking_settings; tomorrow date; r record; n int := 0;
+begin
+  select * into st from public.booking_settings where id = 1;
+  tomorrow := (now() at time zone st.timezone)::date + 1;
+  for r in
+    select coalesce(a.booking_id, a.id) as ref
+      from public.appointments a
+     where a.status = 'Confirmed' and (a.starts_at at time zone st.timezone)::date = tomorrow
+     group by coalesce(a.booking_id, a.id)
+  loop
+    if not exists (select 1 from public.notifications where booking_ref = r.ref and kind = 'reminder') then
+      perform public.queue_notification('reminder', r.ref, '{"notify_customer": true}'::jsonb);
+      n := n + 1;
+    end if;
+  end loop;
+  return n;
+end $$;
+
+-- Staff: cancel a whole booking (or a single staff-made appointment)
+create or replace function public.staff_cancel_booking(p_ref uuid, p_notify boolean default true)
+returns int language plpgsql volatile security definer set search_path = public as $$
+declare n int;
+begin
+  if not public.is_staff() then raise exception 'Only Aardvark staff can do that.'; end if;
+  update public.appointments set status = 'Cancelled'
+   where (booking_id = p_ref or id = p_ref) and status <> 'Cancelled' and status <> 'Done';
+  get diagnostics n = row_count;
+  if n = 0 then raise exception 'Nothing to cancel: the visit is already done or cancelled.'; end if;
+  perform public.queue_notification('booking_cancelled', p_ref,
+    jsonb_build_object('by', 'staff', 'notify_customer', coalesce(p_notify, true)));
+  return n;
+end $$;
+
+-- Staff: move a booking to a new start time (checked against drive times, ignoring itself)
+create or replace function public.staff_reschedule(p_ref uuid, p_start timestamptz, p_notify boolean default true)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare
+  total_dur int; v_lat float8; v_lng float8; cur_van text; vid text; old_start timestamptz;
+  a record; cursor_t timestamptz := p_start;
+begin
+  if not public.is_staff() then raise exception 'Only Aardvark staff can do that.'; end if;
+  select sum(duration_min), min(starts_at), (array_agg(lat order by starts_at))[1], (array_agg(lng order by starts_at))[1],
+         (array_agg(van_id order by starts_at))[1]
+    into total_dur, old_start, v_lat, v_lng, cur_van
+    from public.appointments where (booking_id = p_ref or id = p_ref) and status not in ('Cancelled', 'Done');
+  if total_dur is null then raise exception 'Nothing to reschedule.'; end if;
+  perform pg_advisory_xact_lock(hashtext('aardvark-booking'));
+  select id into vid from public.vans
+   where active and public.slot_is_free_ex(id, p_start, total_dur, v_lat, v_lng, p_ref, true)
+   order by (id = cur_van) desc, id limit 1;
+  if vid is null then raise exception 'That time doesn''t fit: it clashes with another stop or the drive time, or it''s outside working hours.'; end if;
+  for a in select id, duration_min from public.appointments
+            where (booking_id = p_ref or id = p_ref) and status not in ('Cancelled', 'Done') order by starts_at loop
+    update public.appointments set starts_at = cursor_t, van_id = vid where id = a.id;
+    cursor_t := cursor_t + make_interval(mins => a.duration_min);
+  end loop;
+  perform public.queue_notification('booking_rescheduled', p_ref,
+    jsonb_build_object('by', 'staff', 'notify_customer', coalesce(p_notify, true), 'old_start', old_start));
+  return jsonb_build_object('starts_at', p_start, 'van', vid);
+end $$;
+
+-- Owner: remove the sample clients, pets and appointments loaded by seed.sql
+create or replace function public.owner_remove_sample_data()
+returns int language plpgsql volatile security definer set search_path = public as $$
+declare n int;
+begin
+  if not public.is_owner() then raise exception 'Only owners can do that.'; end if;
+  delete from public.clients where notes = 'sample';
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+grant execute on function public.staff_cancel_booking(uuid, boolean), public.staff_reschedule(uuid, timestamptz, boolean),
+                          public.owner_remove_sample_data() to authenticated, service_role;
+revoke execute on function public.queue_notification(text, uuid, jsonb), public.get_notification(uuid),
+                           public.mark_notification(uuid, text, text), public.queue_reminders() from public, anon, authenticated;
+grant execute on function public.queue_notification(text, uuid, jsonb), public.get_notification(uuid),
+                          public.mark_notification(uuid, text, text), public.queue_reminders() to service_role;

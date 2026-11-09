@@ -7,7 +7,10 @@
 
   // Booking draft — kept in memory so it survives signing in halfway through
   var B = { step: 1, address: null, area: null, pets: [], slot: null, day: null, slots: null, slotsKey: "",
-            contact: { name: "", phone: "", email: "" }, notes: "", save: true, password: "", result: null };
+            contact: { name: "", phone: "", email: "" }, notes: "", save: true, password: "", result: null,
+            client: null, sms: false, notifyCustomer: true };
+  function isStaff() { return Api.kind === "staff"; }
+  var staffClients = null;
   var map = null;
 
   /* ---------- small helpers ---------- */
@@ -66,7 +69,7 @@
       var groom = services.filter(function (s) { return !s.is_addon; });
       var extras = services.filter(function (s) { return s.is_addon; });
       U.view.innerHTML = '<div class="pl">' +
-        '<header class="pl-nav"><span class="pl-brand"><img src="../assets/mark.png" alt="" width="40" height="40"><b>AARDVARK</b></span>' +
+        '<header class="pl-nav"><span class="pl-brand"><img src="../assets/logo-nav.png" alt="Aardvark Pet Grooming Systems" width="75" height="90"></span>' +
         '<a class="pl-signin" href="#signin">Sign in</a></header>' +
         '<section class="pl-hero"><div class="pl-hero-copy">' +
           '<p class="pl-eyebrow">Mobile &amp; the Eastern Shore</p>' +
@@ -125,13 +128,14 @@
 
   function flow() {
     document.body.classList.remove("public-landing");
-    U.chrome(Api.kind === "customer");
-    U.setHeader("Book a groom", STEPS[B.step - 1] + " · step " + B.step + " of 5", B.step > 1 ? "book-back" : (Api.kind === "customer" ? "home" : "welcome"), "book");
+    U.chrome(Api.kind === "customer" || isStaff());
+    U.setHeader(isStaff() ? "New booking" : "Book a groom", STEPS[B.step - 1] + " · step " + B.step + " of 5", "book-back", isStaff() ? "today" : "book");
     var back = document.querySelector("[data-back]");
+    var home = isStaff() ? "#today" : Api.kind === "customer" ? "#home" : "#welcome";
     if (back && B.step > 1) back.onclick = function () { B.step--; flow(); };
-    else if (back) back.onclick = function () { location.hash = Api.kind === "customer" ? "#home" : "#welcome"; };
+    else if (back) back.onclick = function () { location.hash = home; };
     U.view.innerHTML = '<div class="bk"><p class="muted pad center">Loading…</p></div>';
-    loadBasics().then(function () {
+    (isStaff() && !staffClients ? Api.staffClients().then(function (c) { staffClients = c; }) : Promise.resolve()).then(loadBasics).then(function () {
       if (Api.kind === "customer") prefillCustomer();
       killMap();
       var bar = '<div class="bk-progress">' + STEPS.map(function (s, i) { return '<i class="' + (i < B.step ? "on" : "") + '"></i>'; }).join("") + "</div>";
@@ -160,8 +164,45 @@
   function bindNext(fn) { var b = $("[data-next]"); if (b) b.onclick = fn; }
 
   // Step 1 — where
+  function clientPicker() {
+    if (!isStaff()) return "";
+    return '<section class="card picker"><p class="label" style="margin-top:0">Customer</p>' +
+      (B.client ? '<div class="picked">' + U.avatar({ name: B.client.name }, 38) + "<div><b>" + esc(B.client.name) + "</b><small>" + esc(B.client.phone || "") + " · " + esc((B.client.address || "").split(",")[0]) +
+        '</small></div><button type="button" class="linkish" data-unpick>Change</button></div>'
+        : '<input class="search" data-csearch placeholder="Search existing customers by name or phone"><ul class="addr-list" data-cresults hidden></ul>' +
+          '<p class="muted small">New customer? Just enter their address below; you\'ll add their details in step 4.</p>') + "</section>";
+  }
+  function bindClientPicker(el) {
+    if (!isStaff()) return;
+    var un = $("[data-unpick]", el);
+    if (un) un.onclick = function () { B.client = null; B.address = null; B.area = null; B.pets = []; B.contact = { name: "", phone: "", email: "" }; B.sms = false; stepAddress(el); };
+    var inp = $("[data-csearch]", el), out = $("[data-cresults]", el);
+    if (!inp) return;
+    inp.oninput = function () {
+      var q = inp.value.trim().toLowerCase(), qd = q.replace(/\D/g, "");
+      if (q.length < 2) { out.hidden = true; return; }
+      var hits = (staffClients || []).filter(function (c) {
+        return (c.name || "").toLowerCase().indexOf(q) > -1 || (qd.length >= 3 && (c.phone || "").replace(/\D/g, "").indexOf(qd) > -1) ||
+          (c.pets || []).some(function (p) { return (p.name || "").toLowerCase().indexOf(q) > -1; });
+      }).slice(0, 8);
+      out.innerHTML = hits.map(function (c, i) {
+        return '<li><button type="button" data-ci="' + i + '">' + U.icon("user") + "<span><b>" + esc(c.name) + "</b> · " + esc(c.phone || "") +
+          '<br><small class="muted">' + esc((c.pets || []).map(function (p) { return p.name; }).join(", ")) + "</small></span></button></li>";
+      }).join("") || '<li class="muted">No match. Treat as a new customer.</li>';
+      out.hidden = false;
+      $$("[data-ci]", out).forEach(function (b) {
+        b.onclick = function () {
+          var c = hits[+b.dataset.ci];
+          B.client = c; B.contact = { name: c.name || "", phone: c.phone || "", email: c.email || "" }; B.sms = !!c.sms_opt_in; B.pets = []; B.slots = null;
+          if (c.lat != null) { B.address = { label: c.address || [c.street, c.city].filter(Boolean).join(", "), street: c.street, city: c.city, state: c.state, zip: c.zip, lat: c.lat, lng: c.lng }; B.area = null; }
+          stepAddress(el);
+        };
+      });
+    };
+  }
+
   function stepAddress(el) {
-    el.innerHTML = "<h2>Where should we park?</h2><p class=\"muted\">We'll check you're in our service area and only offer times our van can reach.</p>" +
+    el.innerHTML = clientPicker() + "<h2>" + (isStaff() ? "Visit address" : "Where should we park?") + "</h2><p class=\"muted\">We'll check you're in our service area and only offer times our van can reach.</p>" +
       '<div class="addr"><input class="search" data-addr type="text" inputmode="search" autocomplete="street-address" placeholder="Start typing your street address" value="' + esc(B.address ? B.address.label : "") + '">' +
       '<ul class="addr-list" data-sugg hidden></ul></div>' +
       '<button class="btn ghost full" data-gps>' + U.icon("nav") + " Use my current location</button>" +
@@ -191,6 +232,7 @@
         });
       }).catch(function (e) { U.toast(e.message); }).then(function () { b.disabled = false; b.lastChild.textContent = " Use my current location"; });
     };
+    bindClientPicker(el);
     if (B.address) showPin();
     bindNext(function () { go(2); });
 
@@ -234,7 +276,7 @@
 
   // Step 2 — pets + services
   function stepPets(el) {
-    var saved = (Api.kind === "customer" && Api.data && Api.data.pets) || [];
+    var saved = (Api.kind === "customer" && Api.data && Api.data.pets) || (isStaff() && B.client && B.client.pets) || [];
     var html = "<h2>Who's getting pampered?</h2>";
     if (saved.length) {
       html += '<p class="muted">Your pets</p><div class="petpick">' + saved.map(function (p) {
@@ -381,12 +423,14 @@
 
   // Step 4 — details + account nudge
   function stepDetails(el) {
-    var guest = Api.kind !== "customer";
+    var guest = Api.kind !== "customer" && !isStaff();
     el.innerHTML = "<h2>Your details</h2>" +
       '<form class="card form" data-details novalidate>' +
       '<label>Your name<input name="name" required autocomplete="name" maxlength="120" value="' + esc(B.contact.name) + '"></label>' +
       '<label>Mobile phone<input name="phone" type="tel" required autocomplete="tel" value="' + esc(B.contact.phone) + '" placeholder="(251) 555-0123"><small class="hint">We\'ll text when we\'re on our way</small></label>' +
-      '<label>Email<input name="email" type="email" required autocomplete="email" value="' + esc(B.contact.email) + '"' + (guest ? "" : " readonly") + '><small class="hint">For your confirmation</small></label>' +
+      '<label>Email' + (isStaff() ? " (optional)" : "") + '<input name="email" type="email"' + (isStaff() ? "" : " required") + ' autocomplete="email" value="' + esc(B.contact.email) + '"' + (Api.kind === "customer" ? " readonly" : "") + '><small class="hint">' + (isStaff() ? "For the customer's confirmation" : "For your confirmation") + "</small></label>" +
+      '<label class="check"><input type="checkbox" name="sms"' + (B.sms ? " checked" : "") + "> <span>" + (isStaff() ? "Customer agreed to get text updates about this visit" : "Text me appointment updates (confirmation, reminder, on-our-way). Msg &amp; data rates may apply; reply STOP to opt out.") + "</span></label>" +
+      (isStaff() ? '<label class="check"><input type="checkbox" name="notify"' + (B.notifyCustomer ? " checked" : "") + "> <span>Send the customer a confirmation</span></label>" : "") +
       '<label>Anything we should know?<textarea name="notes" rows="3" maxlength="500" placeholder="Gate code, where to park, pet nerves, matting…">' + esc(B.notes) + "</textarea></label></form>" +
       (guest ? '<section class="card nudge"><label class="nudge-head"><input type="checkbox" data-save' + (B.save ? " checked" : "") + '><span><b>Save my details for next time</b>' +
         "<small>Create a free account. Your address, gate code and pets are saved, so rebooking takes 3 taps.</small></span></label>" +
@@ -397,6 +441,8 @@
     function collect() {
       B.contact = { name: f.name.value.trim(), phone: f.phone.value.trim(), email: f.email.value.trim() };
       B.notes = f.notes.value.trim();
+      B.sms = f.sms.checked;
+      if (f.notify) B.notifyCustomer = f.notify.checked;
       if (guest) { B.save = $("[data-save]").checked; B.password = $("[data-pw]").value; }
     }
     if (guest) {
@@ -406,7 +452,7 @@
     bindNext(function () {
       collect();
       var bad = !B.contact.name ? "Please enter your name." : B.contact.phone.replace(/\D/g, "").length < 10 ? "Please enter a 10-digit mobile number." :
-        !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(B.contact.email) ? "Please enter a valid email." :
+        (B.contact.email || !isStaff()) && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(B.contact.email) ? "Please enter a valid email." :
         guest && B.save && B.password.length < 8 ? "Choose a password of at least 8 characters, or untick “Save my details”." : "";
       if (bad) return U.toast(bad);
       go(5);
@@ -434,7 +480,8 @@
     bindNext(function () {
       var btn = $("[data-next]"); btn.disabled = true; btn.textContent = "Booking…";
       var payload = {
-        starts_at: B.slot.toISOString(), contact: B.contact, notes: B.notes, save_details: true,
+        starts_at: B.slot.toISOString(), contact: B.contact, notes: B.notes, save_details: true, sms_opt_in: B.sms,
+        notify_customer: isStaff() ? B.notifyCustomer : true,
         address: { label: B.address.label, street: B.address.street, city: B.address.city, state: B.address.state, zip: B.address.zip, lat: B.address.lat, lng: B.address.lng },
         pets: B.pets.map(function (p) {
           var o = { service_id: p.service_id, addon_ids: p.addon_ids || [] };
@@ -442,9 +489,10 @@
           return o;
         })
       };
+      if (isStaff() && B.client) payload.client_id = B.client.id;
       Api.book(payload).then(function (res) {
         B.result = { res: res, slot: B.slot, total: t.total, dur: t.dur, pets: B.pets.map(function (p) { return p.name; }), address: B.address.label, account: null };
-        if (Api.kind !== "customer" && B.save && B.password.length >= 8) {
+        if (!isStaff() && Api.kind !== "customer" && B.save && B.password.length >= 8) {
           return Api.signUpCustomer(B.contact.name, B.contact.email, B.password, B.contact.phone)
             .then(function (r) { B.result.account = r.signedIn ? "signed-in" : "confirm"; })
             .catch(function (e) { B.result.account = "error:" + e.message; });
@@ -471,16 +519,19 @@
 
   function success() {
     var r = B.result;
-    U.setHeader("You're booked!", "", null, "book");
+    U.setHeader(isStaff() ? "Booked" : "You're booked!", "", null, isStaff() ? "today" : "book");
     var acct = r.account === "confirm" ? '<section class="card nudge"><b>One more step for your account</b><p class="muted small">We emailed a confirmation link to ' + esc(B.contact.email) + ". Tap it, then sign in; this booking will be waiting in your account.</p></section>"
       : r.account && r.account.indexOf("error:") === 0 ? '<section class="card nudge"><b>Your booking is confirmed</b><p class="muted small">We couldn\'t create your account (' + esc(r.account.slice(6)) + '). You can <a href="#join">try again</a> any time.</p></section>'
+      : isStaff() ? ""
       : Api.kind !== "customer" ? '<section class="card nudge"><b>Want faster rebooking?</b><p class="muted small">Create a free account with ' + esc(B.contact.email) + ' and this booking will be saved to it.</p><a class="btn ghost full" href="#join">Create account</a></section>' : "";
-    U.view.innerHTML = '<div class="bk done"><div class="done-badge">' + U.icon("check") + "</div><h2>See you " + fmt(r.slot, { weekday: "long" }) + "!</h2>" +
+    U.view.innerHTML = '<div class="bk done"><div class="done-badge">' + U.icon("check") + "</div><h2>" + (isStaff() ? "Booked for " + esc(B.contact.name || "the customer") : "See you " + fmt(r.slot, { weekday: "long" }) + "!") + "</h2>" +
       '<section class="card review"><div class="rv-when">' + U.icon("today") + "<div><b>" + longDate(r.slot) + "</b><span>" + timeLabel(r.slot) + " · " + mins(r.dur) + "</span></div></div>" +
       '<div class="rv-when">' + U.icon("nav") + "<div><b>" + esc(String(r.address || "").split(",")[0]) + "</b><span>" + esc(r.pets.join(", ")) + " · " + money(r.total) + "</span></div></div></section>" +
       '<a class="btn ghost full" download="aardvark-groom.ics" href="' + icsFile(r) + '">' + U.icon("today") + " Add to calendar</a>" + acct +
-      '<a class="btn full" href="' + (Api.kind === "customer" ? "#home" : "#welcome") + '">Done</a></div>';
-    B = { step: 1, address: B.address, area: null, pets: [], slot: null, day: null, slots: null, slotsKey: "", contact: B.contact, notes: "", save: true, password: "", result: null };
+      '<a class="btn full" href="' + (isStaff() ? "#today" : Api.kind === "customer" ? "#home" : "#welcome") + '" data-done>Done</a></div>';
+    if (isStaff()) $("[data-done]").onclick = function (e) { e.preventDefault(); staffClients = null; U.start(); location.hash = "#today"; };
+    B = { step: 1, address: isStaff() ? null : B.address, area: null, pets: [], slot: null, day: null, slots: null, slotsKey: "",
+          contact: isStaff() ? { name: "", phone: "", email: "" } : B.contact, notes: "", save: true, password: "", result: null, client: null, sms: false, notifyCustomer: true };
     if (Api.kind === "customer") Api.load().catch(function () {});
   }
 
@@ -573,6 +624,11 @@
   window.Book = {
     init: function (ui) { U = ui; },
     hasDraft: function () { return B.pets.length > 0 || B.step > 1; },
+    staffFlow: function (fresh) {
+      if (fresh) B = { step: 1, address: null, area: null, pets: [], slot: null, day: null, slots: null, slotsKey: "", contact: { name: "", phone: "", email: "" }, notes: "", save: false, password: "", result: null, client: null, sms: false, notifyCustomer: true };
+      staffClients = fresh ? null : staffClients;
+      flow();
+    },
     reset: function () { B.step = 1; B.slot = null; B.slots = null; },
     routePublic: function (h) {
       switch (h[0]) {

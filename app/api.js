@@ -114,7 +114,8 @@
       appointments: appts.map(function (a) {
         return { id: a.id, petId: a.pet_id, time: hhmm(new Date(a.starts_at)), service: a.service,
                  price: Number(a.price), mins: a.duration_min, drive: a.drive_min || 0,
-                 lat: a.lat, lng: a.lng, status: a.status, online: a.source === "online", address: a.address };
+                 lat: a.lat, lng: a.lng, status: a.status, online: a.source === "online", address: a.address,
+                 ref: a.booking_id || a.id, notes: a.customer_notes };
       }),
       courses: courses.map(function (c) {
         var mods = (c.course_modules || []).sort(function (x, y) { return x.sort - y.sort; });
@@ -232,7 +233,7 @@
 
   // Owners only (enforced by the database, not just the screen)
   Api.listTeam = async function () {
-    return must(await sb.from("staff").select("id, full_name, email, role, active, created_at").order("created_at"));
+    return must(await sb.from("staff").select("id, full_name, email, role, active, alerts, created_at").order("created_at"));
   };
   Api.updateStaff = async function (id, patch) {
     var rows = must(await sb.from("staff").update(patch).eq("id", id).select("id"));
@@ -274,14 +275,16 @@
     if (!LIVE) return { ok: window.Geo.miles({ lat: 30.699, lng: -88.152 }, { lat: lat, lng: lng }) <= 25, miles: +window.Geo.miles({ lat: 30.699, lng: -88.152 }, { lat: lat, lng: lng }).toFixed(1), radius: 25 };
     return must(await sb.rpc("check_service_area", { p_lat: lat, p_lng: lng }));
   };
-  Api.slots = async function (lat, lng, minutes) {
+  Api.slots = async function (lat, lng, minutes, exclude) {
     if (!LIVE) {
       var out = [], d = new Date(); d.setHours(0, 0, 0, 0);
       for (var i = 1; i <= 14; i++) { var day = new Date(d.getTime() + i * DAY); if (day.getDay() === 0 || day.getDay() === 6) continue;
         [9, 10, 11, 13, 14, 15].forEach(function (h) { if (h * 60 + minutes <= 17 * 60) { var t = new Date(day); t.setHours(h); out.push(t); } }); }
       return out;
     }
-    var rows = must(await sb.rpc("get_available_slots", { p_lat: lat, p_lng: lng, p_dur: minutes }));
+    var args = { p_lat: lat, p_lng: lng, p_dur: minutes };
+    if (exclude) args.p_exclude = exclude;
+    var rows = must(await sb.rpc("get_available_slots", args));
     return (rows || []).map(function (r) { return new Date(r.slot || r); });
   };
   Api.book = async function (payload) {
@@ -305,6 +308,32 @@
     Api.client = rows[0] || Api.client;
   };
   Api.updateMyPet = async function (id, patch) { must(await sb.from("pets").update(patch).eq("id", id)); };
+
+  /* ---------------- staff booking tools ---------------- */
+  Api.staffClients = async function () {
+    return must(await sb.from("clients").select("id, name, phone, email, address, street, city, state, zip, lat, lng, sms_opt_in, pets(id, name, species, breed, weight_lbs, coat, color)").order("name").limit(2000));
+  };
+  Api.staffCancel = async function (ref, notify) { return must(await sb.rpc("staff_cancel_booking", { p_ref: ref, p_notify: notify !== false })); };
+  Api.reschedule = async function (ref, start, notify) {
+    var r = await sb.rpc("staff_reschedule", { p_ref: ref, p_start: start.toISOString(), p_notify: notify !== false });
+    if (r.error) throw new Error(r.error.message);
+    return r.data;
+  };
+  Api.saveVan = async function (id, patch) {
+    var rows = must(await sb.from("vans").update(patch).eq("id", id).select("*"));
+    if (!rows || !rows.length) throw new Error("Only owners can change the van.");
+  };
+  Api.allServices = async function () { return must(await sb.from("services").select("*").order("sort")); };
+  Api.saveService = async function (id, patch) {
+    var rows = must(await sb.from("services").update(patch).eq("id", id).select("id"));
+    if (!rows || !rows.length) throw new Error("Only owners can change services.");
+    cache.services = null;
+  };
+  Api.addService = async function (row) { must(await sb.from("services").insert(row)); cache.services = null; };
+  Api.removeSampleData = async function () { return must(await sb.rpc("owner_remove_sample_data")); };
+  Api.recentNotifications = async function () {
+    return must(await sb.from("notifications").select("id, created_at, kind, status, last_error, meta").order("created_at", { ascending: false }).limit(12));
+  };
 
   /* ---------------- owner: availability ---------------- */
   Api.vans = async function () { return must(await sb.from("vans").select("*").eq("active", true).order("id")); };

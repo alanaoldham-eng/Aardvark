@@ -69,7 +69,7 @@
       var groom = services.filter(function (s) { return !s.is_addon; });
       var extras = services.filter(function (s) { return s.is_addon; });
       U.view.innerHTML = '<div class="pl">' +
-        '<header class="pl-nav"><span class="pl-brand"><img src="../assets/logo-nav.png" alt="Aardvark Pet Grooming Systems" width="75" height="90"></span>' +
+        '<header class="pl-nav"><a class="pl-brand" href="../" aria-label="Aardvark Pet Grooming Systems: home page"><img src="../assets/logo-wide-sm.png" alt="Aardvark Pet Grooming Systems" width="339" height="100"></a>' +
         '<a class="pl-signin" href="#signin">Sign in</a></header>' +
         '<section class="pl-hero"><div class="pl-hero-copy">' +
           '<p class="pl-eyebrow">Mobile &amp; the Eastern Shore</p>' +

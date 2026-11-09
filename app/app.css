@@ -194,7 +194,7 @@ a.card.video{text-decoration:none}
   .main{padding-bottom:24px}
   .sidebar{display:flex;flex-direction:column;width:220px;flex:none;background:var(--green);color:#d8e8e0;padding:20px 14px;position:sticky;top:0;height:100vh}
   .side-brand{display:block;margin:-6px -2px 22px;padding:10px 12px 8px;background:var(--cream);border-radius:16px;text-align:center}
-  .side-brand img{height:132px;width:auto;display:inline-block}
+  .side-brand img{width:176px;height:auto;display:inline-block}
   .side-nav{display:flex;flex-direction:column;gap:4px}
   .side-nav a{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;font-weight:500;font-size:.92rem}
   .side-nav a:hover{background:rgba(255,255,255,.08)}

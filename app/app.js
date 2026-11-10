@@ -357,6 +357,7 @@
                    ["service_radius_miles", "Service radius (miles)"], ["lead_time_hours", "Earliest booking (hours ahead)"], ["booking_window_days", "Book up to (days ahead)"],
                    ["trip_fee", "Trip fee ($)"], ["extra_pet_discount", "Extra-pet discount ($)"], ["min_cancel_hours", "Online cancel cutoff (hours)"],
                    ["avg_speed_mph", "Average driving speed (mph)"], ["road_factor", "Road distance factor"]];
+      if (st.loyalty_goal != null) rules.push(["loyalty_goal", "Loyalty card: grooms for a free one"]);
       view.innerHTML =
         '<section class="card"><div class="card-head"><h2>Working hours · ' + esc(van.name) + '</h2></div><div data-hours>' +
         DAYS.map(function (n, d) {
@@ -377,6 +378,7 @@
         '<p class="muted small" data-base-note>' + (van.depot_lat != null ? "Drag the pin to fine-tune, then save." : "No base set yet.") + '</p><button class="btn full" data-base-save disabled>Save base location</button></section>' +
         '<section class="card"><div class="card-head"><h2>Booking rules</h2></div><form class="rules" data-rules>' +
         rules.map(function (r) { return "<label>" + r[1] + '<input name="' + r[0] + '" type="number" step="any" min="0" value="' + (st[r[0]] != null ? Number(st[r[0]]) : "") + '"></label>'; }).join("") +
+        (st.loyalty_enabled != null ? '<label class="check"><input type="checkbox" data-loyalty-on' + (st.loyalty_enabled ? " checked" : "") + '> <span>Loyalty card on (every completed groom earns a stamp; a full card earns a free main groom service)</span></label>' : "") +
         '</form><p class="muted small">Drive time between stops is estimated from GPS distance × road factor ÷ speed, plus setup time. Customers only see times that fit.</p>' +
         '<button class="btn full" data-save-rules>Save rules</button></section>' +
         '<section class="card"><h2>Sample data</h2><p class="muted small" style="margin-top:0">Remove the 7 sample clients (Luna, Mochi, Harper…) and their appointments before taking real bookings, so they don\'t block real times.</p>' +
@@ -439,6 +441,7 @@
       $("[data-save-rules]").onclick = function () {
         var patch = {};
         rules.forEach(function (r) { var v = $('[data-rules] [name="' + r[0] + '"]').value; if (v !== "") patch[r[0]] = Number(v); });
+        var lo = $("[data-loyalty-on]"); if (lo) patch.loyalty_enabled = lo.checked;
         Api.saveSettings(patch).then(function () { toast("Booking rules saved."); }).catch(fail);
       };
     }
@@ -515,7 +518,12 @@
       '<div class="tags">' + (p.tags || ["Regular"]).map(function (t) { return '<span class="tag">' + esc(t) + "</span>"; }).join("") + "</div></div></section>" +
       '<section class="card"><dl class="facts"><dt>Owner</dt><dd>' + esc(p.owner) + "</dd><dt>Phone</dt><dd><a href=\"tel:" + p.phone.replace(/\D/g, "") + '">' + esc(p.phone) + "</a></dd><dt>Area</dt><dd>" + esc(p.area) + "</dd><dt>Coat</dt><dd>" + esc(p.coat) + "</dd><dt>Cadence</dt><dd>Every " + p.cadenceWeeks + " weeks</dd><dt>Last groom</dt><dd>" + (last ? shortDate(last) : "—") + "</dd><dt>" + (p.nextAt ? "Booked" : "Next due") + "</dt><dd>" + shortDate(due) + "</dd></dl>" +
       '<div class="note"><b>Groomer notes</b><p>' + esc(p.notes) + "</p></div></section>" +
+      petDocsCard(p) + '<div data-loyalty></div>' +
       (p.hasNext ? "" : '<button class="btn full" data-book>Book next groom · ' + shortDate(due < today ? today : due) + "</button>");
+    bindPetDocs(p, id);
+    if (p.clientId || Api.mode !== "live") Api.loyalty(p.clientId).then(function (l) {
+      var box = $("[data-loyalty]"); if (box && l && window.Book) box.innerHTML = Book.loyaltyCard(l, { staff: true, compact: true });
+    }).catch(function () {});
     var bk = $("[data-book]");
     if (bk) bk.onclick = function () {
       var when = due < today ? today : due;
@@ -527,21 +535,62 @@
     };
   }
 
+  function petDocsCard(p) {
+    var rs = window.Book ? Book.rabiesState(p.rabiesPath, p.rabiesExpires) : { cls: "none", text: "Not uploaded" };
+    return '<section class="card petdoc-staff"><div class="petdoc-head"><b>Rabies certificate</b><span class="doc-chip doc-' + rs.cls + '">' + esc(rs.text) + "</span></div>" +
+      (p.rabiesPath ? '<div class="petdoc-actions"><button class="pill" type="button" data-doc-view>View certificate</button></div>'
+                    : '<p class="muted small">Not uploaded yet. The owner can add it under My pets, or upload a photo here.</p>') +
+      (Api.mode === "live" ? '<details class="doc-upload"><summary>' + (p.rabiesPath ? "Replace or update" : "Upload for the owner") + "</summary>" +
+        '<label>Expiry date<input type="date" data-doc-exp value="' + esc(p.rabiesExpires || "") + '"></label>' +
+        '<label>Photo or PDF<input type="file" data-doc-file accept="image/*,application/pdf"></label>' +
+        '<button class="btn ghost full" type="button" data-doc-save>Save</button></details>' : "") + "</section>";
+  }
+  function bindPetDocs(p, id) {
+    var v = $("[data-doc-view]"), sv = $("[data-doc-save]");
+    if (v) v.onclick = function () {
+      var w = window.open("", "_blank");
+      Api.rabiesUrl(p.rabiesPath).then(function (u) { if (w) w.location = u; else location.href = u; }).catch(function (e) { if (w) w.close(); fail(e); });
+    };
+    if (sv) sv.onclick = function () {
+      var file = $("[data-doc-file]").files[0], exp = $("[data-doc-exp]").value || null;
+      var pet = { id: p.id, client_id: p.clientId, rabies_cert_path: p.rabiesPath };
+      if (!file && !p.rabiesPath) return toast("Choose a photo or PDF first.");
+      sv.disabled = true;
+      (file ? Api.uploadRabies(pet, file, exp) : Api.updateMyPet(p.id, { rabies_expires: exp }))
+        .then(function () { toast("Certificate saved."); return Api.load().then(function (d) { D = d; viewPet(id); }); })
+        .catch(function (e) { sv.disabled = false; fail(e); });
+    };
+  }
+
   function overallProgress() {
     var all = [].concat.apply([], D.courses.map(function (c) { return c.modules; }));
     return all.length ? Math.round(all.filter(function (m) { return m.done; }).length / all.length * 100) : 0;
   }
   function coursePct(c) { return c.modules.length ? Math.round(c.modules.filter(function (m) { return m.done; }).length / c.modules.length * 100) : 0; }
 
+  function courseArt(c) { return window.AcademyArt ? AcademyArt.course(c) : {}; }
+  function phasePct(n) {
+    var all = [].concat.apply([], D.courses.filter(function (c) { return courseArt(c).phase === n; }).map(function (c) { return c.modules; }));
+    return all.length ? Math.round(all.filter(function (m) { return m.done; }).length / all.length * 100) : null;
+  }
+
   function viewAcademy() {
     setHeader("Academy", "Your training. Your growth.", null, "academy");
-    var pct = overallProgress();
-    view.innerHTML = '<section class="card academy-head"><div><h2>10-Week Groomer Program</h2><p class="muted">Theory · Table mechanics · Shelter practicum</p></div>' +
+    var pct = overallProgress(), A = window.AcademyArt || {};
+    var phases = [[1, "Phase 1: Online theory", "Weeks 1–2 · 15–20 hrs/wk"], [2, "Phase 2: Prep, safety & shadowing", "Weeks 3–6 · 16 hrs/wk"]]
+      .map(function (p) { return { n: p[0], title: p[1], sub: p[2], pct: phasePct(p[0]) }; })
+      .filter(function (p) { return p.pct !== null; });
+    view.innerHTML = '<section class="card academy-head">' + (A.mascot ? '<img class="academy-mascot" src="' + A.mascot + '" alt="" width="92" height="99">' : "") +
+      '<div class="academy-title"><h2>10-Week Groomer Program</h2><p class="muted">Theory · Table mechanics · Shelter practicum</p></div>' +
       '<div class="ring" style="--p:' + pct + '"><b>' + pct + "%</b><small>Complete</small></div></section>" +
+      (phases.length && A.phaseArt ? '<div class="phases">' + phases.map(function (p) {
+        return '<section class="card phase"><img src="' + A.phaseArt[p.n] + '" alt="" loading="lazy"><div><b>' + esc(p.title) + "</b><small>" + esc(p.sub) + '</small><span class="bar"><i style="width:' + p.pct + '%"></i></span><small>' + p.pct + "% complete</small></div></section>";
+      }).join("") + "</div>" : "") +
       '<div class="seg"><button class="on">My Courses</button><button data-browse>Browse</button></div>' +
       '<div class="card list">' + D.courses.map(function (c) {
-        var cp = coursePct(c);
-        return '<a class="course" href="#course/' + c.id + '">' + avatar({ name: c.title, photo: c.photo, color: c.color }, 54) +
+        var cp = coursePct(c), art = courseArt(c);
+        return '<a class="course" href="#course/' + c.id + '">' +
+          (art.badge ? '<img class="course-art" src="' + art.badge + '" alt="" width="58" height="62" loading="lazy">' : avatar({ name: c.title, photo: c.photo, color: c.color }, 54)) +
           '<span class="course-body"><b>' + esc(c.title) + "</b><small>" + c.modules.length + " modules · " + c.duration + '</small><span class="bar"><i style="width:' + cp + '%"></i></span></span>' +
           '<span class="pct ' + (cp === 100 ? "full" : "") + '">' + (cp === 100 ? icon("check") : cp + "%") + "</span></a>";
       }).join("") + "</div>";
@@ -551,12 +600,17 @@
   function viewCourse(id) {
     var c = D.courses.find(function (x) { return x.id === id; }); if (!c) return viewAcademy();
     setHeader(c.title, c.modules.length + " modules · " + c.duration, "academy", "academy");
+    var art = courseArt(c);
     var vid = (c.modules.find(function (m) { return m.video && !m.done; }) || c.modules.find(function (m) { return m.video; }) || {}).video;
-    view.innerHTML = (vid ? '<a class="card video" target="_blank" rel="noopener" href="' + esc(vid) + '">' + icon("play") + "<span>Play next lesson</span></a>"
-                          : '<section class="card video">' + icon("play") + "<span>Video lessons are being filmed</span></section>") +
+    view.innerHTML = (art.hero ? '<section class="card course-hero"><img src="' + art.hero + '" alt=""><div><b>' + esc(c.title) + '</b><small class="muted">Phase ' + art.phase + " · " + coursePct(c) + "% complete</small></div></section>" : "") +
+      (vid ? '<a class="card video" target="_blank" rel="noopener" href="' + esc(vid) + '">' + icon("play") + "<span>Play next lesson</span></a>"
+           : '<section class="card video video-soon">' + icon("play") + "<span>Video lessons are being filmed</span></section>") +
       '<section class="card"><div class="card-head"><h2>Modules</h2><span class="muted">' + coursePct(c) + '% complete</span></div><ul class="modules">' +
       c.modules.map(function (m, i) {
-        return '<li><label><input type="checkbox" data-mod="' + i + '"' + (m.done ? " checked" : "") + '><span class="box">' + icon("check") + '</span><span><small>Module ' + (i + 1) + "</small>" + esc(m.title) + "</span></label></li>";
+        var img = window.AcademyArt ? AcademyArt.module(c, m, i) : null;
+        return '<li><label><input type="checkbox" data-mod="' + i + '"' + (m.done ? " checked" : "") + '><span class="box">' + icon("check") + "</span>" +
+          (img ? '<img class="mod-art" src="' + img + '" alt="" width="52" height="52" loading="lazy">' : "") +
+          '<span><small>Module ' + (i + 1) + "</small>" + esc(m.title) + "</span></label></li>";
       }).join("") + "</ul></section>";
     view.querySelectorAll("[data-mod]").forEach(function (cb) {
       cb.onchange = function () {

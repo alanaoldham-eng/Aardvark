@@ -61,6 +61,10 @@ create table if not exists public.pets (
   created_at     timestamptz not null default now()
 );
 create index if not exists pets_client_idx on public.pets(client_id);
+-- Optional rabies certificate (file lives in the private 'pet-docs' storage bucket)
+alter table public.pets add column if not exists rabies_cert_path   text;
+alter table public.pets add column if not exists rabies_expires     date;
+alter table public.pets add column if not exists rabies_uploaded_at timestamptz;
 
 create table if not exists public.appointments (
   id                 uuid primary key default gen_random_uuid(),
@@ -123,7 +127,9 @@ create table if not exists public.waitlist (
 -- ---------- Views (run with the caller's permissions) -----------------
 
 -- Each pet with its owner and last completed groom
-create or replace view public.pet_overview with (security_invoker = true) as
+-- (dropped and re-created so new pet columns can be added safely)
+drop view if exists public.pet_overview;
+create view public.pet_overview with (security_invoker = true) as
 select p.*,
        c.name  as owner_name,
        c.phone as owner_phone,
@@ -245,7 +251,8 @@ begin
                      and status not in ('Done', 'Cancelled')) then
       insert into public.appointments (pet_id, van_id, starts_at, service, price, duration_min, lat, lng)
       values (new.pet_id, new.van_id, new.starts_at + make_interval(weeks => coalesce(weeks, 6)),
-              new.service, new.price, new.duration_min, new.lat, new.lng);
+              replace(new.service, ' (free loyalty groom)', ''), new.price + coalesce(new.loyalty_discount, 0),
+              new.duration_min, new.lat, new.lng);
     end if;
   end if;
   return new;
@@ -579,6 +586,8 @@ declare
   plan jsonb := '[]'::jsonb; item jsonb;
   cursor_t timestamptz; price numeric; dur int; label text;
   ids uuid[] := '{}'; new_id uuid;
+  want_free boolean := coalesce((p->>'use_free_groom')::boolean, false);
+  free_idx int := -1; k int := 0; free_amt numeric := 0; disc numeric;
 begin
   select * into st from public.booking_settings where id = 1;
   if t is null or v_lat is null or v_lng is null then raise exception 'Please choose a time and confirm your address.'; end if;
@@ -603,7 +612,7 @@ begin
       dur := dur + addon.duration_min; price := price + addon.price; label := label || ' + ' || addon.name;
     end loop;
     if n = 0 then price := price + st.trip_fee; else price := greatest(price - st.extra_pet_discount, 0); end if;
-    plan := plan || jsonb_build_object('pet', pet, 'dur', dur, 'price', price, 'label', label);
+    plan := plan || jsonb_build_object('pet', pet, 'dur', dur, 'price', price, 'label', label, 'base', svc.price);
     total_dur := total_dur + dur; total_price := total_price + price; n := n + 1;
   end loop;
 
@@ -654,10 +663,26 @@ begin
      where id = cid;
   end if;
 
+  -- Loyalty card: one free groom (the pet's main service) when the card is full
+  if want_free and (uid is not null or staff) then
+    if coalesce((public.loyalty_for_client(cid)->>'available')::int, 0) < 1 then
+      raise exception 'There''s no free groom on this loyalty card yet.';
+    end if;
+    select coalesce(min(i - 1), 0) into free_idx
+      from jsonb_array_elements(plan) with ordinality as x(e, i)
+     where coalesce((e->'pet'->>'free')::boolean, false);
+  end if;
+
   -- Pets + appointments, back to back at the same address
   cursor_t := t;
   for item in select * from jsonb_array_elements(plan) loop
-    pet := item->'pet'; pid := null;
+    pet := item->'pet'; pid := null; disc := null;
+    if k = free_idx then
+      disc := least((item->>'base')::numeric, (item->>'price')::numeric);
+      item := jsonb_set(item, '{price}', to_jsonb((item->>'price')::numeric - disc));
+      free_amt := disc; total_price := total_price - disc;
+    end if;
+    k := k + 1;
     if pet ? 'pet_id' and (uid is not null or staff) then
       select pp.id into pid from public.pets pp where pp.id = (pet->>'pet_id')::uuid and pp.client_id = cid;
     end if;
@@ -670,9 +695,10 @@ begin
       returning id into pid;
     end if;
     insert into public.appointments (pet_id, van_id, starts_at, service, price, duration_min, lat, lng,
-                                     status, booking_id, source, customer_notes, address)
-    values (pid, vid, cursor_t, item->>'label', (item->>'price')::numeric, (item->>'dur')::int, v_lat, v_lng,
-            'Confirmed', bid, 'online', left(p->>'notes', 500), addr)
+                                     status, booking_id, source, customer_notes, address, loyalty_discount)
+    values (pid, vid, cursor_t, item->>'label' || case when disc is not null then ' (free loyalty groom)' else '' end,
+            (item->>'price')::numeric, (item->>'dur')::int, v_lat, v_lng,
+            'Confirmed', bid, 'online', left(p->>'notes', 500), addr, disc)
     returning id into new_id;
     ids := ids || new_id;
     cursor_t := cursor_t + make_interval(mins => (item->>'dur')::int);
@@ -686,7 +712,8 @@ begin
                        'notify_customer', coalesce((p->>'notify_customer')::boolean, true)));
 
   return jsonb_build_object('booking_id', bid, 'starts_at', t, 'ends_at', cursor_t,
-                            'total', total_price, 'duration_min', total_dur, 'appointments', to_jsonb(ids));
+                            'total', total_price, 'duration_min', total_dur, 'appointments', to_jsonb(ids),
+                            'free_groom', free_amt > 0, 'free_amount', free_amt);
 end $$;
 
 -- Customers cancel their own booking (up to min_cancel_hours before)
@@ -951,3 +978,126 @@ revoke execute on function public.queue_notification(text, uuid, jsonb), public.
                            public.mark_notification(uuid, text, text), public.queue_reminders() from public, anon, authenticated;
 grant execute on function public.queue_notification(text, uuid, jsonb), public.get_notification(uuid),
                           public.mark_notification(uuid, text, text), public.queue_reminders() to service_role;
+
+-- =====================================================================
+-- LOYALTY CARD + PET DOCUMENTS + MORE ACADEMY COURSES
+-- Loyalty: every completed, paid groom adds a stamp. A full card (10 stamps by
+-- default) earns one free groom — the pet's main service. Free grooms don't
+-- earn stamps. Cancelling a free groom gives it back automatically.
+-- Rabies certificates: optional photo/PDF per pet in a private storage bucket.
+-- =====================================================================
+alter table public.booking_settings add column if not exists loyalty_enabled boolean not null default true;
+alter table public.booking_settings add column if not exists loyalty_goal int not null default 10;
+do $$ begin
+  alter table public.booking_settings add constraint booking_settings_loyalty_goal_chk check (loyalty_goal between 3 and 30);
+exception when duplicate_object then null; end $$;
+
+alter table public.appointments add column if not exists loyalty_discount numeric(8,2);  -- set when this was a free groom
+
+-- (pet rabies certificate columns are added near the top, next to the pets table)
+
+-- Card status for one client (internal; the app calls loyalty_status)
+create or replace function public.loyalty_for_client(p_client uuid)
+returns jsonb language sql stable security definer set search_path = public as $$
+  with st as (select loyalty_enabled as enabled, loyalty_goal as goal from public.booking_settings where id = 1),
+  c as (
+    select count(*) filter (where a.status = 'Done' and a.loyalty_discount is null and a.price > 0) as stamps,
+           count(*) filter (where a.loyalty_discount is not null and a.status <> 'Cancelled')     as used,
+           count(*) filter (where a.loyalty_discount is not null and a.status = 'Done')           as redeemed
+      from public.appointments a join public.pets p on p.id = a.pet_id
+     where p.client_id = p_client
+  )
+  select jsonb_build_object(
+    'enabled', st.enabled, 'goal', st.goal, 'stamps', c.stamps,
+    'progress', c.stamps % st.goal, 'earned', c.stamps / st.goal, 'used', c.used, 'redeemed', c.redeemed,
+    'available', case when st.enabled then greatest(c.stamps / st.goal - c.used, 0) else 0 end)
+  from st, c
+$$;
+revoke execute on function public.loyalty_for_client(uuid) from public, anon, authenticated;
+grant execute on function public.loyalty_for_client(uuid) to service_role;
+
+-- Customers get their own card; staff can look up any client's card
+create or replace function public.loyalty_status(p_client uuid default null)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare cid uuid;
+begin
+  if p_client is null then
+    select id into cid from public.clients where user_id = auth.uid();
+  elsif public.is_staff() or exists (select 1 from public.clients where id = p_client and user_id = auth.uid()) then
+    cid := p_client;
+  end if;
+  if cid is null then
+    return (select jsonb_build_object('enabled', loyalty_enabled, 'goal', loyalty_goal, 'stamps', 0, 'progress', 0,
+                                      'earned', 0, 'used', 0, 'redeemed', 0, 'available', 0)
+              from public.booking_settings where id = 1);
+  end if;
+  return public.loyalty_for_client(cid);
+end $$;
+revoke execute on function public.loyalty_status(uuid) from public, anon;
+grant execute on function public.loyalty_status(uuid) to authenticated, service_role;
+
+-- ---------- Pet documents (private storage bucket) ----------
+-- Files live at  pet-docs/<client id>/<pet id>/<file>.  Customers can only
+-- reach their own pets' folders; staff can see every file.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('pet-docs', 'pet-docs', false, 10485760,
+        array['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'])
+on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit,
+                               allowed_mime_types = excluded.allowed_mime_types;
+
+create or replace function public.owns_pet_folder(p_name text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.pets p join public.clients c on c.id = p.client_id
+     where c.user_id = auth.uid()
+       and c.id::text = split_part(p_name, '/', 1)
+       and p.id::text = split_part(p_name, '/', 2))
+$$;
+grant execute on function public.owns_pet_folder(text) to authenticated, service_role;
+
+drop policy if exists "pet docs: customers read own" on storage.objects;
+create policy "pet docs: customers read own" on storage.objects for select to authenticated
+  using (bucket_id = 'pet-docs' and (public.is_staff() or public.owns_pet_folder(name)));
+drop policy if exists "pet docs: customers upload own" on storage.objects;
+create policy "pet docs: customers upload own" on storage.objects for insert to authenticated
+  with check (bucket_id = 'pet-docs' and (public.is_staff() or public.owns_pet_folder(name)));
+drop policy if exists "pet docs: customers replace own" on storage.objects;
+create policy "pet docs: customers replace own" on storage.objects for update to authenticated
+  using (bucket_id = 'pet-docs' and (public.is_staff() or public.owns_pet_folder(name)))
+  with check (bucket_id = 'pet-docs' and (public.is_staff() or public.owns_pet_folder(name)));
+drop policy if exists "pet docs: customers delete own" on storage.objects;
+create policy "pet docs: customers delete own" on storage.objects for delete to authenticated
+  using (bucket_id = 'pet-docs' and (public.is_staff() or public.owns_pet_folder(name)));
+
+-- Keep the stored path pointing at the pet's own folder
+create or replace function public.pets_check_doc_path() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if new.rabies_cert_path is not null
+     and new.rabies_cert_path not like new.client_id::text || '/' || new.id::text || '/%' then
+    raise exception 'Certificate file must be stored in this pet''s folder.';
+  end if;
+  if new.rabies_cert_path is distinct from old.rabies_cert_path then
+    new.rabies_uploaded_at := case when new.rabies_cert_path is null then null else now() end;
+  end if;
+  return new;
+end $$;
+drop trigger if exists pets_check_doc_path on public.pets;
+create trigger pets_check_doc_path before update of rabies_cert_path on public.pets
+  for each row execute function public.pets_check_doc_path();
+
+-- ---------- More Academy courses (curriculum outline — safe to keep) ----------
+insert into public.courses (id, title, duration_label, color, sort) values
+  ('tools',  'Tool Mechanics',           '1h 10m',    '#7f8c84', 5),
+  ('shadow', 'Prep, Safety & Shadowing', '16 hrs/wk', '#2f7d62', 6)
+on conflict (id) do nothing;
+insert into public.course_modules (course_id, sort, title) values
+  ('tools', 1, 'Clipper blades & guard combs'),
+  ('tools', 2, 'Scissors, shears & thinners'),
+  ('tools', 3, 'Reading the grooming manual'),
+  ('tools', 4, 'Tool mechanics quiz'),
+  ('shadow', 1, 'Shadowing your mentor groomer'),
+  ('shadow', 2, 'Nail grinding'),
+  ('shadow', 3, 'Sanitary trim'),
+  ('shadow', 4, 'Bath & blowout')
+on conflict (course_id, sort) do nothing;

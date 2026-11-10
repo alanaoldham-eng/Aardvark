@@ -33,6 +33,10 @@ window.AARDVARK_DATA = {
     { id: "feline", title: "Feline Grooming Basics", photo: "cat", duration: "1h 45m",
       modules: [["Reading feline body language", true], ["Safe handling & towel wraps", true], ["Nail trims", false], ["Lion cuts & sanitary trims", false], ["Low-stress cat bathing", false]] },
     { id: "comms", title: "Client Communication", photo: "dog-shihtzu", duration: "30m",
-      modules: [["Doorstep check-in script", false], ["Talking about matting & shave-downs", false]] }
+      modules: [["Doorstep check-in script", false], ["Talking about matting & shave-downs", false]] },
+    { id: "tools", title: "Tool Mechanics", photo: "dog-golden", duration: "1h 10m",
+      modules: [["Clipper blades & guard combs", true], ["Scissors, shears & thinners", false], ["Reading the grooming manual", false], ["Tool mechanics quiz", false]] },
+    { id: "shadow", title: "Prep, Safety & Shadowing", photo: "dog-golden", duration: "16 hrs/wk",
+      modules: [["Shadowing your mentor groomer", true], ["Nail grinding", true], ["Sanitary trim", false], ["Bath & blowout", false]] }
   ]
 };

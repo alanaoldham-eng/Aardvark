@@ -53,10 +53,46 @@
     return { dur: dur, price: price, label: label };
   }
   function totals() {
-    var dur = 0, sub = 0, disc = 0;
-    B.pets.forEach(function (p, i) { var l = petLine(p); dur += l.dur; sub += l.price; if (i > 0) disc += Math.min(Number(settings.extra_pet_discount), l.price); });
+    var dur = 0, sub = 0, disc = 0, free = 0, fi = freeIndex();
+    B.pets.forEach(function (p, i) {
+      var l = petLine(p), d = i > 0 ? Math.min(Number(settings.extra_pet_discount), l.price) : 0;
+      dur += l.dur; sub += l.price; disc += d;
+      if (i === fi) { var base = svc(p.service_id); free = Math.min(base ? Number(base.price) : 0, l.price - d); }
+    });
     var trip = B.pets.length ? Number(settings.trip_fee) : 0;
-    return { dur: dur, sub: sub, trip: trip, disc: disc, total: sub + trip - disc };
+    return { dur: dur, sub: sub, trip: trip, disc: disc, free: free, total: sub + trip - disc - free };
+  }
+
+  /* ---------- loyalty card ---------- */
+  function currentLoyalty() {
+    if (isStaff()) return B.client && B.loyalty && B.loyalty.clientId === B.client.id ? B.loyalty.data : null;
+    return Api.kind === "customer" && Api.data ? Api.data.loyalty : null;
+  }
+  function freeIndex() {
+    var l = currentLoyalty();
+    if (!B.useFree || !l || !l.enabled || !(l.available > 0) || !B.pets.length) return -1;
+    return Math.min(B.freePet || 0, B.pets.length - 1);
+  }
+  var PAW = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="8.5" r="1.9"/><circle cx="12" cy="6" r="1.9"/><circle cx="17" cy="8.5" r="1.9"/><circle cx="4.6" cy="12.6" r="1.6"/><circle cx="19.4" cy="12.6" r="1.6"/><path d="M7.6 16.6c0-2.8 2-5.1 4.4-5.1s4.4 2.3 4.4 5.1c0 1.7-1.5 2.3-4.4 2.3s-4.4-.6-4.4-2.3z"/></svg>';
+  function loyaltyCard(l, opts) {
+    opts = opts || {};
+    if (!l || !l.enabled) return "";
+    var goal = l.goal || 10, ready = l.available > 0;
+    var filled = ready && l.progress === 0 ? goal : l.progress;
+    var left = goal - l.progress;
+    var stamps = "";
+    for (var i = 0; i < goal; i++) {
+      var on = i < filled, last = i === goal - 1;
+      stamps += '<span class="lc-stamp' + (on ? " on" : "") + (last ? " gift" : "") + '" aria-hidden="true">' + (last && !on ? "FREE" : PAW) + "</span>";
+    }
+    var msg = ready
+      ? "<b>" + (l.available > 1 ? l.available + " free grooms" : "Your free groom") + " is ready!</b><small>" + (opts.staff ? "Tick “Use free groom” when booking." : "Choose “Use my free groom” when you book.") + "</small>"
+      : "<b>" + left + " more groom" + (left === 1 ? "" : "s") + " to a free one</b><small>Every completed groom earns a stamp.</small>";
+    return '<section class="loyalty-card' + (ready ? " ready" : "") + (opts.compact ? " compact" : "") + '" aria-label="Loyalty card: ' + filled + " of " + goal + ' stamps">' +
+      '<div class="lc-top"><img src="../assets/mark.png" alt="" width="40" height="40"><div><span>Aardvark</span><b>Loyalty Card</b></div><em>' + filled + "/" + goal + "</em></div>" +
+      '<div class="lc-grid" style="--n:' + Math.ceil(goal / 2) + '">' + stamps + "</div>" +
+      '<div class="lc-msg">' + msg + "</div>" +
+      (l.redeemed ? '<small class="lc-foot">Free grooms enjoyed so far: ' + l.redeemed + "</small>" : "") + "</section>";
   }
 
   /* ---------- public landing ---------- */
@@ -461,6 +497,15 @@
 
   // Step 5 — confirm
   function stepConfirm(el) {
+    if (isStaff() && B.client && (!B.loyalty || B.loyalty.clientId !== B.client.id)) {
+      el.innerHTML = '<p class="muted">Loading…</p>';
+      var cid = B.client.id;
+      Api.loyalty(cid).then(function (l) { B.loyalty = { clientId: cid, data: l }; }).catch(function () { B.loyalty = { clientId: cid, data: null }; })
+        .then(function () { if (B.step === 5) stepConfirm(el); });
+      return;
+    }
+    var loy = currentLoyalty(), canFree = !!(loy && loy.enabled && loy.available > 0);
+    if (!canFree) B.useFree = false;
     var t = totals();
     el.innerHTML = "<h2>Review &amp; book</h2>" +
       '<section class="card review"><div class="rv-when">' + U.icon("today") + "<div><b>" + longDate(B.slot) + "</b><span>" + timeLabel(B.slot) + " – " + timeLabel(new Date(+B.slot + t.dur * 60000)) + "</span></div></div>" +
@@ -472,26 +517,37 @@
       }).join("") +
       "<tr><td>Trip fee</td><td>" + money(t.trip) + "</td></tr>" +
       (t.disc ? "<tr><td>Multi-pet savings</td><td>−" + money(t.disc) + "</td></tr>" : "") +
+      (t.free ? '<tr class="free"><td>Free loyalty groom<small>' + esc(B.pets[freeIndex()].name) + "'s groom is on us</small></td><td>−" + money(t.free) + "</td></tr>" : "") +
       '<tr class="tot"><td>Total</td><td>' + money(t.total) + "</td></tr></table>" +
       '<p class="muted small">Nothing to pay now. Free cancellation up to ' + settings.min_cancel_hours + " hours before.</p></section>" +
+      (canFree ? '<section class="card use-free"><label class="check"><input type="checkbox" data-usefree' + (B.useFree ? " checked" : "") + '><span><b>' + (isStaff() ? "Use free groom" : "Use my free groom") + "</b><small>" +
+        (loy.available > 1 ? loy.available + " free grooms on the card. " : "") + "Covers one pet's main groom service; add-ons and the trip fee still apply.</small></span></label>" +
+        (B.pets.length > 1 ? '<label class="free-pet">Which pet?<select data-freepet>' + B.pets.map(function (p, i) { return '<option value="' + i + '"' + (i === (B.freePet || 0) ? " selected" : "") + ">" + esc(p.name) + "</option>"; }).join("") + "</select></label>" : "") +
+        "</section>" : "") +
       (B.notes ? '<section class="card"><p class="label">Notes for the groomer</p><p>' + esc(B.notes) + "</p></section>" : "") +
       '<p class="form-msg" data-err role="alert"></p>' +
       footer("Book for " + money(t.total), true);
+    var uf = $("[data-usefree]"), fp = $("[data-freepet]");
+    if (uf) uf.onchange = function () { B.useFree = uf.checked; stepConfirm(el); };
+    if (fp) fp.onchange = function () { B.freePet = +fp.value; stepConfirm(el); };
     bindNext(function () {
       var btn = $("[data-next]"); btn.disabled = true; btn.textContent = "Booking…";
+      var fi = freeIndex();
       var payload = {
         starts_at: B.slot.toISOString(), contact: B.contact, notes: B.notes, save_details: true, sms_opt_in: B.sms,
         notify_customer: isStaff() ? B.notifyCustomer : true,
         address: { label: B.address.label, street: B.address.street, city: B.address.city, state: B.address.state, zip: B.address.zip, lat: B.address.lat, lng: B.address.lng },
-        pets: B.pets.map(function (p) {
+        use_free_groom: fi > -1,
+        pets: B.pets.map(function (p, i) {
           var o = { service_id: p.service_id, addon_ids: p.addon_ids || [] };
+          if (i === fi) o.free = true;
           if (p.pet_id) o.pet_id = p.pet_id; else Object.assign(o, { name: p.name, species: p.species, breed: p.breed, weight: p.weight, coat: p.coat });
           return o;
         })
       };
       if (isStaff() && B.client) payload.client_id = B.client.id;
       Api.book(payload).then(function (res) {
-        B.result = { res: res, slot: B.slot, total: t.total, dur: t.dur, pets: B.pets.map(function (p) { return p.name; }), address: B.address.label, account: null };
+        B.result = { res: res, slot: B.slot, total: res && res.total != null ? Number(res.total) : t.total, free: !!(res && res.free_groom), dur: t.dur, pets: B.pets.map(function (p) { return p.name; }), address: B.address.label, account: null };
         if (!isStaff() && Api.kind !== "customer" && B.save && B.password.length >= 8) {
           return Api.signUpCustomer(B.contact.name, B.contact.email, B.password, B.contact.phone)
             .then(function (r) { B.result.account = r.signedIn ? "signed-in" : "confirm"; })
@@ -527,11 +583,12 @@
     U.view.innerHTML = '<div class="bk done"><div class="done-badge">' + U.icon("check") + "</div><h2>" + (isStaff() ? "Booked for " + esc(B.contact.name || "the customer") : "See you " + fmt(r.slot, { weekday: "long" }) + "!") + "</h2>" +
       '<section class="card review"><div class="rv-when">' + U.icon("today") + "<div><b>" + longDate(r.slot) + "</b><span>" + timeLabel(r.slot) + " · " + mins(r.dur) + "</span></div></div>" +
       '<div class="rv-when">' + U.icon("nav") + "<div><b>" + esc(String(r.address || "").split(",")[0]) + "</b><span>" + esc(r.pets.join(", ")) + " · " + money(r.total) + "</span></div></div></section>" +
+      (r.free ? '<section class="card nudge"><b>Free groom applied 🎉</b><p class="muted small">Thanks for being a loyal customer. Your loyalty card starts filling again after this visit.</p></section>' : "") +
       '<a class="btn ghost full" download="aardvark-groom.ics" href="' + icsFile(r) + '">' + U.icon("today") + " Add to calendar</a>" + acct +
       '<a class="btn full" href="' + (isStaff() ? "#today" : Api.kind === "customer" ? "#home" : "#welcome") + '" data-done>Done</a></div>';
     if (isStaff()) $("[data-done]").onclick = function (e) { e.preventDefault(); staffClients = null; U.start(); location.hash = "#today"; };
     B = { step: 1, address: isStaff() ? null : B.address, area: null, pets: [], slot: null, day: null, slots: null, slotsKey: "",
-          contact: isStaff() ? { name: "", phone: "", email: "" } : B.contact, notes: "", save: true, password: "", result: null, client: null, sms: false, notifyCustomer: true };
+          contact: isStaff() ? { name: "", phone: "", email: "" } : B.contact, notes: "", save: true, password: "", result: null, client: null, sms: false, notifyCustomer: true, useFree: false, freePet: 0, loyalty: null };
     if (Api.kind === "customer") Api.load().catch(function () {});
   }
 
@@ -547,6 +604,7 @@
       var past = (Api.data.bookings || []).filter(function (b) { return b.end <= now && b.status !== "Cancelled"; }).reverse().slice(0, 5);
       U.view.innerHTML =
         '<a class="card book-cta" href="#book"><div><b>Book a groom</b><small>Your address and pets are saved</small></div>' + U.icon("chev", "chev") + "</a>" +
+        loyaltyCard(Api.data.loyalty) +
         '<section class="card"><div class="card-head"><h2>Upcoming</h2></div>' + (up.length ? up.map(bookingRow).join("") : '<p class="muted">No visits booked yet.</p>') + "</section>" +
         (past.length ? '<section class="card"><div class="card-head"><h2>Past visits</h2></div>' + past.map(function (b) { return bookingRow(b, true); }).join("") + "</section>" : "");
       $$("[data-cancel]").forEach(function (btn) {
@@ -582,23 +640,62 @@
       (past ? '<button class="pill" data-again="' + idx + '">Book again</button>' : "") + "</div></div></div>";
   }
 
+  function rabiesState(path, expires) {
+    if (!path) return { cls: "none", text: "Not uploaded" };
+    if (!expires) return { cls: "ok", text: "On file" };
+    var d = new Date(expires + "T12:00:00"), days = Math.round((d - new Date()) / 864e5);
+    var label = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    if (days < 0) return { cls: "bad", text: "Expired " + label };
+    if (days <= 30) return { cls: "warn", text: "Expires " + label };
+    return { cls: "ok", text: "Valid until " + label };
+  }
+
   function myPets() {
     killMap(); U.chrome(true);
     U.setHeader("My pets", "Saved for faster booking", null, "mypets");
     var pets = Api.data.pets || [];
     U.view.innerHTML = (pets.length ? pets.map(function (p) {
-      return '<form class="card petedit" data-id="' + p.id + '"><div class="pet-head">' + U.avatar({ name: p.name, color: p.color }, 44) + "<div><b>" + esc(p.name) + "</b><small>" + esc(p.species) + "</small></div></div>" +
+      var rs = rabiesState(p.rabies_cert_path, p.rabies_expires);
+      return '<div class="card petcard" data-id="' + p.id + '"><form class="petedit"><div class="pet-head">' + U.avatar({ name: p.name, color: p.color }, 44) + "<div><b>" + esc(p.name) + "</b><small>" + esc(p.species) + "</small></div></div>" +
         '<div class="row2"><label>Name<input name="name" value="' + esc(p.name) + '" maxlength="60"></label><label>Breed<input name="breed" value="' + esc(p.breed || "") + '" maxlength="80"></label></div>' +
         '<div class="row2"><label>Weight (lb)<input name="weight" inputmode="decimal" value="' + (p.weight_lbs != null ? Number(p.weight_lbs) : "") + '"></label>' +
-        '<label>Coat<input name="coat" value="' + esc(p.coat || "") + '" maxlength="60"></label></div><button class="btn ghost full" type="submit">Save</button></form>';
+        '<label>Coat<input name="coat" value="' + esc(p.coat || "") + '" maxlength="60"></label></div><button class="btn ghost full" type="submit">Save</button></form>' +
+        '<div class="petdoc"><div class="petdoc-head"><b>Rabies certificate</b><span class="doc-chip doc-' + rs.cls + '">' + esc(rs.text) + "</span></div>" +
+        '<p class="muted small">Optional. Upload a photo or PDF so your groomer has it on file. Only you and our team can see it.</p>' +
+        '<div class="row2"><label>Expiry date<input type="date" name="rabies_expires" value="' + esc(p.rabies_expires || "") + '"></label>' +
+        '<label class="filepick">' + (p.rabies_cert_path ? "Replace file" : "Choose file") + '<input type="file" name="rabies_file" accept="image/*,application/pdf"><span class="filename muted small">No file chosen</span></label></div>' +
+        '<div class="petdoc-actions"><button class="btn full" type="button" data-upload>' + (p.rabies_cert_path ? "Save certificate" : "Upload certificate") + "</button>" +
+        (p.rabies_cert_path ? '<button class="pill ghost" type="button" data-view>View</button><button class="pill ghost" type="button" data-remove>Remove</button>' : "") + "</div></div></div>";
     }).join("") : '<section class="card"><p class="muted">Pets you book are saved here automatically.</p></section>') +
       '<a class="btn full" href="#book">Book a groom</a>';
-    $$("form.petedit").forEach(function (f) {
+    $$(".petcard").forEach(function (card) {
+      var pet = pets.find(function (x) { return x.id === card.dataset.id; });
+      var f = $("form.petedit", card);
       f.onsubmit = function (e) {
         e.preventDefault();
         var w = parseFloat(f.weight.value);
-        Api.updateMyPet(f.dataset.id, { name: f.name.value.trim() || undefined, breed: f.breed.value.trim(), weight_lbs: isNaN(w) ? null : w, coat: f.coat.value.trim() })
+        Api.updateMyPet(pet.id, { name: f.name.value.trim() || undefined, breed: f.breed.value.trim(), weight_lbs: isNaN(w) ? null : w, coat: f.coat.value.trim() })
           .then(function () { U.toast("Saved."); return Api.load(); }).then(myPets).catch(function (err) { U.toast(err.message); });
+      };
+      var fileIn = $("[name=rabies_file]", card), exp = $("[name=rabies_expires]", card);
+      fileIn.onchange = function () { $(".filename", card).textContent = fileIn.files[0] ? fileIn.files[0].name : "No file chosen"; };
+      $("[data-upload]", card).onclick = function () {
+        var btn = this, file = fileIn.files[0];
+        if (!file && !pet.rabies_cert_path) return U.toast("Choose a photo or PDF of the certificate first.");
+        btn.disabled = true; btn.textContent = "Saving…";
+        var job = file ? Api.uploadRabies(pet, file, exp.value || null) : Api.updateMyPet(pet.id, { rabies_expires: exp.value || null });
+        job.then(function () { U.toast("Rabies certificate saved."); return Api.load(); }).then(myPets)
+          .catch(function (err) { btn.disabled = false; btn.textContent = "Try again"; U.toast(err.message); });
+      };
+      var view = $("[data-view]", card), rm = $("[data-remove]", card);
+      if (view) view.onclick = function () {
+        var w = window.open("", "_blank");
+        Api.rabiesUrl(pet.rabies_cert_path).then(function (u) { if (w) w.location = u; else location.href = u; })
+          .catch(function (err) { if (w) w.close(); U.toast(err.message); });
+      };
+      if (rm) rm.onclick = function () {
+        if (!confirm("Remove " + pet.name + "'s rabies certificate?")) return;
+        Api.removeRabies(pet).then(function () { U.toast("Removed."); return Api.load(); }).then(myPets).catch(function (err) { U.toast(err.message); });
       };
     });
   }
@@ -607,7 +704,7 @@
     killMap(); U.chrome(true);
     U.setHeader("Account", Api.user && Api.user.email || "", null, "account");
     var c = Api.client || {};
-    U.view.innerHTML = '<form class="card form" data-acct><h2>Your details</h2>' +
+    U.view.innerHTML = loyaltyCard(Api.data && Api.data.loyalty) + '<form class="card form" data-acct><h2>Your details</h2>' +
       '<label>Name<input name="name" value="' + esc(c.name || "") + '" maxlength="120"></label>' +
       '<label>Mobile phone<input name="phone" type="tel" value="' + esc(c.phone || "") + '"></label>' +
       '<label>Email<input value="' + esc(c.email || (Api.user && Api.user.email) || "") + '" readonly></label>' +
@@ -623,9 +720,11 @@
 
   window.Book = {
     init: function (ui) { U = ui; },
+    loyaltyCard: loyaltyCard,
+    rabiesState: rabiesState,
     hasDraft: function () { return B.pets.length > 0 || B.step > 1; },
     staffFlow: function (fresh) {
-      if (fresh) B = { step: 1, address: null, area: null, pets: [], slot: null, day: null, slots: null, slotsKey: "", contact: { name: "", phone: "", email: "" }, notes: "", save: false, password: "", result: null, client: null, sms: false, notifyCustomer: true };
+      if (fresh) B = { step: 1, address: null, area: null, pets: [], slot: null, day: null, slots: null, slotsKey: "", contact: { name: "", phone: "", email: "" }, notes: "", save: false, password: "", result: null, client: null, sms: false, notifyCustomer: true, useFree: false, freePet: 0, loyalty: null };
       staffClients = fresh ? null : staffClients;
       flow();
     },

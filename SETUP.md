@@ -100,6 +100,12 @@ Go to **Authentication → URL Configuration**:
 
 **Location services:** address search uses Photon and road routes use OSRM. Both are free OpenStreetMap services with fair-use limits, which is fine while you're small. When volume grows, switch to a paid provider (Mapbox or Google) by editing `app/geo.js` only.
 
+### 1h. Loyalty card and rabies certificates
+Re-running the latest `schema.sql` sets both up. Nothing else to configure.
+
+- **Loyalty card:** every completed, paid groom adds a stamp to the customer's digital card (Home and Account screens). When the card is full (10 stamps by default), the customer gets one free groom. It covers one pet's main groom service; add-ons and the trip fee are still charged. Customers tick **Use my free groom** at checkout; staff see the card on each pet's page and can apply the free groom when booking for a customer. Free grooms don't earn stamps, and cancelling a free groom gives it back. Change the number of stamps or turn the card off under **Business → Availability → Booking rules**.
+- **Rabies certificates:** customers can upload a photo or PDF, plus the expiry date, for each pet under **My pets**. Files go into a private storage bucket called `pet-docs` (Supabase → **Storage**). Each customer can only reach their own pets' files; staff can see them all. The pet's page shows staff whether a certificate is valid, expiring within 30 days, expired or missing, and staff can upload one for a customer too. Files are limited to 10 MB.
+
 ### Removing the sample data later
 ```sql
 delete from public.clients where notes = 'sample';   -- also removes their pets and appointments

@@ -223,3 +223,51 @@
 .svc-edit-head b{flex:1}
 .svc-edit-head .check{margin:0!important}
 .base-map{height:220px;margin-top:12px}
+
+/* rabies certificate on My pets */
+.petdoc{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)}
+.petdoc-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.petdoc p{margin:6px 0 0}
+.petdoc label{display:block;font-size:.82rem;font-weight:600;margin:10px 0 0}
+.petdoc input[type=date]{display:block;width:100%;margin-top:6px;font:inherit;font-weight:400;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.filepick{position:relative}
+.filepick input[type=file]{display:block;width:100%;margin-top:6px;font:inherit;font-size:.8rem;padding:8px;border:1px dashed var(--line);border-radius:12px;background:var(--cream,#faf6ee)}
+.filepick .filename{display:none}
+.petdoc-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.petdoc-actions .btn{flex:1 1 180px;margin:0}
+.doc-chip{font-size:.72rem;font-weight:700;padding:4px 9px;border-radius:999px;white-space:nowrap;background:#eee;color:#555}
+.doc-ok{background:#e3f1ea;color:#1f6b50}
+.doc-warn{background:#fff1d6;color:#8a5a00}
+.doc-bad{background:#fde3e1;color:#a3261b}
+.doc-none{background:#eef0ef;color:#6b716e}
+
+/* digital loyalty card */
+.loyalty-card{position:relative;overflow:hidden;border-radius:20px;padding:16px 16px 14px;margin-bottom:14px;color:#f4ecd8;
+  background:radial-gradient(120% 90% at 100% 0%,rgba(255,255,255,.12),transparent 55%),linear-gradient(135deg,#1f5c4a,#123d31);
+  box-shadow:0 10px 24px rgba(18,61,49,.25)}
+.loyalty-card::after{content:"";position:absolute;right:-40px;bottom:-40px;width:150px;height:150px;border-radius:50%;border:18px solid rgba(255,255,255,.05)}
+.lc-top{display:flex;align-items:center;gap:10px}
+.lc-top img{width:40px;height:40px;border-radius:50%;background:#f4ecd8;padding:3px}
+.lc-top span{display:block;font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;opacity:.75}
+.lc-top b{font-size:1.05rem}
+.lc-top em{margin-left:auto;font-style:normal;font-weight:800;font-size:1.1rem;color:#e7c873}
+.lc-grid{display:grid;grid-template-columns:repeat(var(--n,5),1fr);gap:8px;margin:14px 0 12px}
+.lc-stamp{aspect-ratio:1;border-radius:50%;display:grid;place-items:center;border:2px dashed rgba(244,236,216,.35);font-size:.6rem;font-weight:800;letter-spacing:.04em;color:rgba(244,236,216,.6)}
+.lc-stamp svg{width:58%;height:58%;fill:rgba(244,236,216,.18)}
+.lc-stamp.on{border:2px solid #e7c873;background:#e7c873;animation:stampIn .35s ease-out both}
+.lc-stamp.on svg{fill:#123d31}
+.lc-stamp.gift{border-color:rgba(231,200,115,.7);color:#e7c873}
+.lc-msg b{display:block;font-size:.95rem}
+.lc-msg small{display:block;opacity:.8;font-size:.8rem;margin-top:2px}
+.lc-foot{display:block;margin-top:8px;font-size:.72rem;opacity:.65}
+.loyalty-card.ready{background:radial-gradient(120% 90% at 100% 0%,rgba(255,255,255,.18),transparent 55%),linear-gradient(135deg,#2f7d62,#1a4f40)}
+.loyalty-card.ready .lc-msg b{color:#ffe7a3}
+@keyframes stampIn{from{transform:scale(1.35) rotate(-12deg);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){.lc-stamp.on{animation:none}}
+.use-free{border:2px solid var(--green)}
+.use-free .check{margin:0!important}
+.use-free small{display:block;color:var(--muted);font-size:.8rem;font-weight:400}
+.free-pet{display:block;font-size:.82rem;font-weight:600;margin-top:10px}
+.free-pet select{display:block;width:100%;margin-top:6px;font:inherit;padding:10px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.bill tr.free td{color:var(--green)}
+.petdoc .row2{grid-template-columns:1fr}

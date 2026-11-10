@@ -47,9 +47,11 @@
   async function loadCustomer(client) {
     var res = await Promise.all([
       sb.from("pets").select("*").eq("client_id", client.id).order("created_at"),
-      sb.from("appointments").select("*, pets(name, species)").order("starts_at", { ascending: false }).limit(200)
+      sb.from("appointments").select("*, pets(name, species)").order("starts_at", { ascending: false }).limit(200),
+      sb.rpc("loyalty_status")
     ]);
     var pets = must(res[0]), appts = must(res[1]);
+    var loyalty = res[2].error ? null : res[2].data;   // null until schema.sql with the loyalty card has been run
     var groups = {};
     appts.forEach(function (a) {
       var key = a.booking_id || (a.starts_at.slice(0, 10) + ":" + (a.address || ""));
@@ -63,7 +65,7 @@
     });
     var bookings = Object.keys(groups).map(function (k) { return groups[k]; })
       .sort(function (x, y) { return x.start - y.start; });
-    return { client: client, pets: pets, bookings: bookings };
+    return { client: client, pets: pets, bookings: bookings, loyalty: loyalty };
   }
 
   async function loadLive() {
@@ -107,7 +109,8 @@
           coat: p.coat || "—", color: p.color, owner: p.owner_name, phone: p.owner_phone || "", area: p.owner_area || "",
           cadenceWeeks: p.cadence_weeks, notes: p.notes || "No notes yet.", tags: p.tags && p.tags.length ? p.tags : null,
           lastGroom: p.last_groom_at ? daysBetween(new Date(p.last_groom_at), now) : null,
-          hasNext: !!p.next_appointment_at,
+          hasNext: !!p.next_appointment_at, clientId: p.client_id,
+          rabiesPath: p.rabies_cert_path || null, rabiesExpires: p.rabies_expires || null,
           nextAt: p.next_appointment_at ? new Date(p.next_appointment_at) : null
         };
       }),
@@ -308,6 +311,43 @@
     Api.client = rows[0] || Api.client;
   };
   Api.updateMyPet = async function (id, patch) { must(await sb.from("pets").update(patch).eq("id", id)); };
+
+  /* ---------------- loyalty card ---------------- */
+  // Customers: their own card. Staff: pass a client id.
+  Api.loyalty = async function (clientId) {
+    if (!LIVE) return { enabled: true, goal: 10, stamps: 7, progress: 7, earned: 0, used: 0, redeemed: 0, available: 0 };
+    var r = await sb.rpc("loyalty_status", clientId ? { p_client: clientId } : {});
+    return r.error ? null : r.data;
+  };
+
+  /* ---------------- pet documents (rabies certificate) ---------------- */
+  var DOC_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf"];
+  Api.uploadRabies = async function (pet, file, expires) {
+    if (!LIVE) throw new Error("Demo mode — files aren't saved.");
+    if (!file) throw new Error("Choose a photo or PDF of the certificate.");
+    if (DOC_TYPES.indexOf(file.type) < 0) throw new Error("Please upload a photo (JPG, PNG, HEIC) or a PDF.");
+    if (file.size > 10 * 1024 * 1024) throw new Error("That file is over 10 MB. Try a smaller photo.");
+    var ext = (file.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5) || (file.type === "application/pdf" ? "pdf" : "jpg");
+    var path = pet.client_id + "/" + pet.id + "/rabies-" + Date.now() + "." + ext;
+    var up = await sb.storage.from("pet-docs").upload(path, file, { contentType: file.type, upsert: false });
+    if (up.error) throw new Error(up.error.message);
+    var old = pet.rabies_cert_path;
+    var r = await sb.from("pets").update({ rabies_cert_path: path, rabies_expires: expires || null }).eq("id", pet.id);
+    if (r.error) { await sb.storage.from("pet-docs").remove([path]); throw new Error(r.error.message); }
+    if (old && old !== path) await sb.storage.from("pet-docs").remove([old]);
+    return path;
+  };
+  Api.removeRabies = async function (pet) {
+    if (!LIVE) return;
+    must(await sb.from("pets").update({ rabies_cert_path: null, rabies_expires: null }).eq("id", pet.id));
+    if (pet.rabies_cert_path) await sb.storage.from("pet-docs").remove([pet.rabies_cert_path]);
+  };
+  Api.rabiesUrl = async function (path) {
+    if (!LIVE || !path) return null;
+    var r = await sb.storage.from("pet-docs").createSignedUrl(path, 600);
+    if (r.error) throw new Error(r.error.message);
+    return r.data.signedUrl;
+  };
 
   /* ---------------- staff booking tools ---------------- */
   Api.staffClients = async function () {

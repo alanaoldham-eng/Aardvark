@@ -14,7 +14,9 @@ insert into public.courses (id, title, duration_label, color, sort) values
   ('skin',   'Canine Skin & Coat Health',       '1h 20m', '#d9a35b', 1),
   ('bath',   'Professional Bathing Techniques', '55m',    '#c9a27e', 2),
   ('feline', 'Feline Grooming Basics',          '1h 45m', '#8a8f99', 3),
-  ('comms',  'Client Communication',            '30m',    '#c7a98f', 4)
+  ('comms',  'Client Communication',            '30m',    '#c7a98f', 4),
+  ('tools',  'Tool Mechanics',                  '1h 10m', '#7f8c84', 5),
+  ('shadow', 'Prep, Safety & Shadowing',        '16 hrs/wk', '#2f7d62', 6)
 on conflict (id) do nothing;
 
 insert into public.course_modules (course_id, sort, title) values
@@ -31,7 +33,15 @@ insert into public.course_modules (course_id, sort, title) values
   ('feline', 4, 'Lion cuts & sanitary trims'),
   ('feline', 5, 'Low-stress cat bathing'),
   ('comms', 1, 'Doorstep check-in script'),
-  ('comms', 2, 'Talking about matting & shave-downs')
+  ('comms', 2, 'Talking about matting & shave-downs'),
+  ('tools', 1, 'Clipper blades & guard combs'),
+  ('tools', 2, 'Scissors, shears & thinners'),
+  ('tools', 3, 'Reading the grooming manual'),
+  ('tools', 4, 'Tool mechanics quiz'),
+  ('shadow', 1, 'Shadowing your mentor groomer'),
+  ('shadow', 2, 'Nail grinding'),
+  ('shadow', 3, 'Sanitary trim'),
+  ('shadow', 4, 'Bath & blowout')
 on conflict (course_id, sort) do nothing;
 
 -- Sample clients and pets (fictional; 555 phone numbers)

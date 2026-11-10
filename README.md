@@ -13,15 +13,15 @@ No build step and no frameworks: plain HTML, CSS and JavaScript, so the site run
 
 ## The app (`/app/`)
 
-**Customers (public):** a landing page with services and prices, and online booking: address with GPS → pets and services → only times the van can really reach → confirm. Guests can book; an account saves the address and pets for 3-tap rebooking, and lets customers see and cancel upcoming visits.
+**Customers (public):** a landing page with services and prices, and online booking: address with GPS → pets and services → only times the van can really reach → confirm. Guests can book; an account saves the address and pets for 3-tap rebooking, lets customers see and cancel upcoming visits, keeps a digital loyalty card (10 grooms, then the next one free), and stores an optional rabies certificate for each pet.
 
 **Staff (sign in):**
 
 - **Today:** the day's schedule with status (Confirmed → On the way → In progress → Done). On wide screens it becomes the dashboard: schedule, route map, business performance and the next pet's record.
 - **Route:** van dispatch map with numbered stops and drive times. *Start navigation* opens Google Maps with every remaining stop in order.
 - **Appointment:** call the owner, text "on my way", navigate, and step through the groom. Finishing a groom sets the rebook date from the pet's cadence.
-- **Clients:** searchable pet and owner records, with next-due and overdue dates.
-- **Academy:** the 10-week program, with course progress and module checklists.
+- **Clients:** searchable pet and owner records, with next-due and overdue dates, the rabies certificate status and the owner's loyalty card.
+- **Academy:** the 10-week program, illustrated: phase progress, course badges and a picture for every module (artwork in `assets/academy/`, mapped in `app/academy-art.js`).
 - **Business:** bookings, revenue trend, average ticket, rebook rate.
 
 **Two modes, picked automatically:**

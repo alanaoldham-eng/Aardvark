@@ -23,8 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      # Publish the site only: design/ (full-size source art) and supabase/ stay out
+      - name: Build site folder
+        run: rsync -a --exclude '.git' --exclude '.github' --exclude '/design' --exclude '/supabase' ./ _site/
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4

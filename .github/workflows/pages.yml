@@ -22,6 +22,12 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # skip the full-size source art in design/ so deploys stay fast
+          sparse-checkout: |
+            /*
+            !/design/
+          sparse-checkout-cone-mode: false
       - uses: actions/configure-pages@v5
       # Publish the site only: design/ (full-size source art) and supabase/ stay out
       - name: Build site folder

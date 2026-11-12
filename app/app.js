@@ -45,8 +45,19 @@
   function icon(n, cls) { return '<svg class="ico ' + (cls || "") + '" viewBox="0 0 24 24" aria-hidden="true">' + ICON[n] + "</svg>"; }
 
   var PALETTE = { "dog-golden": "#d9a35b", "dog-poodle": "#c9a27e", cat: "#8a8f99", "dog-aussie": "#5b6a7d", "dog-shihtzu": "#c7a98f", "dog-doodle": "#d8b48a", "dog-schnauzer": "#7d7f80" };
+  var BREEDS = [[/doodle|oodle|cavapoo|cockapoo|maltipoo|yorkipoo|shihpoo|bernedoodle/i, "doodle"], [/poodle/i, "poodle"],
+    [/golden|retriever|labrador|\blab\b/i, "golden"], [/shih|maltese|lhasa|havanese|bichon/i, "shihtzu"], [/york|terrier|schnauzer/i, "yorkie"],
+    [/corgi/i, "corgi"], [/beagle|hound|basset|spaniel/i, "beagle"], [/husky|malamute|samoyed|shepherd|akita|shiba/i, "husky"],
+    [/mix|mutt|rescue/i, "mixed"]];
+  function breedArt(p) {
+    if (!p || !p.breed || /cat/i.test(p.species || "")) return null;
+    for (var i = 0; i < BREEDS.length; i++) if (BREEDS[i][0].test(p.breed)) return "../assets/app/breeds/" + BREEDS[i][1] + ".webp";
+    return null;
+  }
   function avatar(p, size) {
     size = size || 44;
+    var art = breedArt(p);
+    if (art) return '<span class="avatar avatar-art" style="--s:' + size + 'px"><img src="' + art + '" alt="" width="' + size + '" height="' + size + '" loading="lazy"></span>';
     return '<span class="avatar" style="--s:' + size + 'px;--c:' + (p.color || PALETTE[p.photo] || "#a99") + '">' +
       '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="8.5" r="1.9"/><circle cx="12" cy="6" r="1.9"/><circle cx="17" cy="8.5" r="1.9"/><path d="M7.6 16.6c0-2.8 2-5.1 4.4-5.1s4.4 2.3 4.4 5.1c0 1.7-1.5 2.3-4.4 2.3s-4.4-.6-4.4-2.3z"/></svg>' +
       "<b>" + esc(p.name[0]) + "</b></span>";
@@ -580,7 +591,8 @@
     var phases = [[1, "Phase 1: Online theory", "Weeks 1–2 · 15–20 hrs/wk"], [2, "Phase 2: Prep, safety & shadowing", "Weeks 3–6 · 16 hrs/wk"]]
       .map(function (p) { return { n: p[0], title: p[1], sub: p[2], pct: phasePct(p[0]) }; })
       .filter(function (p) { return p.pct !== null; });
-    view.innerHTML = '<section class="card academy-head">' + (A.mascot ? '<img class="academy-mascot" src="' + A.mascot + '" alt="" width="92" height="99">' : "") +
+    view.innerHTML = (A.banner ? '<div class="academy-banner"><img src="' + A.banner + '" alt="An Aardvark instructor guiding a student through a groom" width="1000" height="429"></div>' : "") +
+      '<section class="card academy-head">' + (A.mascot ? '<img class="academy-mascot" src="' + A.mascot + '" alt="" width="92" height="99">' : "") +
       '<div class="academy-title"><h2>10-Week Groomer Program</h2><p class="muted">Theory · Table mechanics · Shelter practicum</p></div>' +
       '<div class="ring" style="--p:' + pct + '"><b>' + pct + "%</b><small>Complete</small></div></section>" +
       (phases.length && A.phaseArt ? '<div class="phases">' + phases.map(function (p) {
@@ -593,7 +605,9 @@
           (art.badge ? '<img class="course-art" src="' + art.badge + '" alt="" width="58" height="62" loading="lazy">' : avatar({ name: c.title, photo: c.photo, color: c.color }, 54)) +
           '<span class="course-body"><b>' + esc(c.title) + "</b><small>" + c.modules.length + " modules · " + c.duration + '</small><span class="bar"><i style="width:' + cp + '%"></i></span></span>' +
           '<span class="pct ' + (cp === 100 ? "full" : "") + '">' + (cp === 100 ? icon("check") : cp + "%") + "</span></a>";
-      }).join("") + "</div>";
+      }).join("") + "</div>" +
+      (A.graduate ? '<section class="card graduate' + (pct === 100 ? " done" : "") + '"><img src="' + A.graduate + '" alt="A new groomer holding her Aardvark Academy certificate" width="900" height="506" loading="lazy"><div><b>' +
+        (pct === 100 ? "You did it! 🎓" : "Graduation day") + "</b><small>" + (pct === 100 ? "Every course complete. Talk to your mentor about your certificate and first solo route." : "Finish every course and your practicum to earn your Aardvark Academy certificate.") + "</small></div></section>" : "");
     $("[data-browse]").onclick = function () { toast("Course catalog opens with public enrollment."); };
   }
 
@@ -602,7 +616,7 @@
     setHeader(c.title, c.modules.length + " modules · " + c.duration, "academy", "academy");
     var art = courseArt(c);
     var vid = (c.modules.find(function (m) { return m.video && !m.done; }) || c.modules.find(function (m) { return m.video; }) || {}).video;
-    view.innerHTML = (art.hero ? '<section class="card course-hero"><img src="' + art.hero + '" alt=""><div><b>' + esc(c.title) + '</b><small class="muted">Phase ' + art.phase + " · " + coursePct(c) + "% complete</small></div></section>" : "") +
+    view.innerHTML = (art.hero ? '<section class="card course-hero' + (art.heroIsPhoto ? " photo" : "") + '"><img src="' + art.hero + '" alt=""><div><b>' + esc(c.title) + '</b><small class="muted">Phase ' + art.phase + " · " + coursePct(c) + "% complete</small></div></section>" : "") +
       (vid ? '<a class="card video" target="_blank" rel="noopener" href="' + esc(vid) + '">' + icon("play") + "<span>Play next lesson</span></a>"
            : '<section class="card video video-soon">' + icon("play") + "<span>Video lessons are being filmed</span></section>") +
       '<section class="card"><div class="card-head"><h2>Modules</h2><span class="muted">' + coursePct(c) + '% complete</span></div><ul class="modules">' +

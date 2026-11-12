@@ -237,3 +237,18 @@ a.card.video{text-decoration:none}
 .doc-upload .btn{margin-top:10px}
 .loyalty-card.compact{padding:12px 14px}
 .loyalty-card.compact .lc-grid{gap:6px;margin:10px 0 8px}
+.avatar-art{background:#efe2cc}.avatar-art img{width:100%;height:100%;display:block;object-fit:cover}
+.academy-banner{border-radius:18px;overflow:hidden;margin-bottom:14px;box-shadow:0 10px 26px -16px rgba(15,74,60,.5)}
+.academy-banner img{display:block;width:100%;aspect-ratio:21/9;object-fit:cover}
+.phase img{width:112px;aspect-ratio:3/2;object-fit:cover;border-radius:12px}
+.course-art[src*="photo-"]{object-fit:cover;border-radius:12px}
+.mod-art[src*="photo-"]{object-fit:cover}
+.course-hero.photo{padding:0;overflow:hidden;background:#fff}
+.course-hero.photo img{max-width:none;max-height:none;width:100%;aspect-ratio:16/9;object-fit:cover}
+.course-hero.photo div{padding:4px 16px 14px}
+.graduate{display:flex;flex-direction:column;padding:0;overflow:hidden;margin-top:14px}
+.graduate img{width:100%;aspect-ratio:16/7;object-fit:cover;display:block;filter:saturate(.85)}
+.graduate.done img{filter:none}
+.graduate div{padding:12px 16px 16px;display:flex;flex-direction:column}
+.graduate small{color:var(--muted);font-size:.84rem;margin-top:2px}
+@media (min-width:900px){.academy-banner img{aspect-ratio:3/1}}

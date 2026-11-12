@@ -113,19 +113,19 @@
           "<p>One pet, one groomer, start to finish, in our quiet, climate-controlled salon on wheels. No crates, no waiting rooms, no strange dogs.</p>" +
           '<a class="btn pl-cta" href="#book">' + U.icon("today") + " Book a groom</a>" +
           '<p class="pl-small">See real-time openings near you · about 2 minutes</p></div>' +
-          '<img class="pl-hero-logo" src="../assets/logo-tagline.png" alt="Aardvark Pet Grooming Systems — Better care. Smarter grooming." width="794" height="888"></section>' +
+          '<img class="pl-hero-photo" src="../assets/app/van-hero.webp" alt="The Aardvark grooming van parked under live oaks" width="1200" height="675"></section>' +
         '<section class="pl-section"><h2>How it works</h2><ol class="pl-steps">' +
-          "<li><span>1</span><b>Tell us where</b><small>Type your address or use your phone's location. We check that we can reach you.</small></li>" +
-          "<li><span>2</span><b>Pick your pets &amp; services</b><small>Prices and times shown up front: no surprises.</small></li>" +
-          "<li><span>3</span><b>Choose a time that's really open</b><small>We only show times our groomer can actually drive to and finish.</small></li>" +
+          '<li><img src="../assets/app/perk-track.webp" alt="" width="480" height="360" loading="lazy"><span>1</span><b>Tell us where</b><small>Type your address or use your phone\'s location. We check that we can reach you.</small></li>' +
+          '<li><span class="pl-breeds" aria-hidden="true"><img src="../assets/app/breeds/doodle.webp" alt=""><img src="../assets/app/breeds/corgi.webp" alt=""><img src="../assets/app/breeds/beagle.webp" alt=""></span><span>2</span><b>Pick your pets &amp; services</b><small>Prices and times shown up front: no surprises.</small></li>' +
+          '<li><img src="../assets/app/perk-book.webp" alt="" width="480" height="360" loading="lazy"><span>3</span><b>Choose a time that\'s really open</b><small>We only show times our groomer can actually drive to and finish.</small></li>' +
         "</ol></section>" +
         '<section class="pl-section"><h2>Services &amp; prices</h2><div class="pl-menu">' +
           groom.map(function (s) { return '<div class="pl-item"><div><b>' + esc(s.name) + "</b><small>" + esc(s.description || "") + '</small></div><span class="pl-price">' + money(s.price) + "<small>" + mins(s.duration_min) + "</small></span></div>"; }).join("") +
         "</div>" + (extras.length ? '<p class="pl-extras"><b>Add-ons:</b> ' + extras.map(function (s) { return esc(s.name) + " " + money(s.price); }).join(" · ") + "</p>" : "") +
         '<p class="pl-small">Plus a ' + money(settings.trip_fee) + " trip fee per visit · " + money(settings.extra_pet_discount) + " off each extra pet at the same address.</p></section>" +
-        '<section class="pl-section pl-account"><div><h2>Make rebooking a 3-tap job</h2>' +
+        '<section class="pl-section pl-account"><img class="pl-account-art" src="../assets/app/perk-rebook.webp" alt="" width="480" height="360" loading="lazy"><div><h2>Make rebooking a 3-tap job</h2>' +
           "<p>Create a free account and we'll remember your address, gate code and every pet's details, so next time you just pick a time.</p>" +
-          '<ul class="pl-ticks"><li>Saved address &amp; pets</li><li>See and cancel upcoming visits</li><li>Book again in seconds</li></ul></div>' +
+          '<ul class="pl-ticks"><li>Saved address &amp; pets</li><li>See and cancel upcoming visits</li><li>Book again in seconds</li><li>A digital loyalty card: every 10 grooms, the next one is free</li></ul></div>' +
           '<div class="pl-account-cta"><a class="btn" href="#join">Create a free account</a><a class="btn ghost" href="#book">Book as a guest</a></div></section>' +
         '<footer class="pl-foot"><a href="../">aardvarkgroom.com</a><span>·</span><a href="#signin">Staff sign in</a></footer>' +
       "</div>";
@@ -317,7 +317,7 @@
     if (saved.length) {
       html += '<p class="muted">Your pets</p><div class="petpick">' + saved.map(function (p) {
         var on = B.pets.some(function (x) { return x.pet_id === p.id; });
-        return '<button type="button" class="petchip' + (on ? " on" : "") + '" data-saved="' + p.id + '">' + U.avatar({ name: p.name, color: p.color }, 34) +
+        return '<button type="button" class="petchip' + (on ? " on" : "") + '" data-saved="' + p.id + '">' + U.avatar({ name: p.name, color: p.color, breed: p.breed, species: p.species }, 34) +
           "<span><b>" + esc(p.name) + "</b><small>" + esc(p.breed || p.species) + (p.weight_lbs ? " · " + Number(p.weight_lbs) + " lb" : "") + "</small></span>" + U.icon("check", "tick") + "</button>";
       }).join("") + "</div>";
     }
@@ -344,7 +344,7 @@
   }
 
   function petCard(p, i) {
-    var form = p.pet_id ? '<div class="pet-head">' + U.avatar({ name: p.name }, 40) + "<div><b>" + esc(p.name) + "</b><small>" + esc(p.breed || p.species) + (p.weight ? " · " + p.weight + " lb" : "") + "</small></div></div>"
+    var form = p.pet_id ? '<div class="pet-head">' + U.avatar({ name: p.name, breed: p.breed, species: p.species }, 40) + "<div><b>" + esc(p.name) + "</b><small>" + esc(p.breed || p.species) + (p.weight ? " · " + p.weight + " lb" : "") + "</small></div></div>"
       : '<div class="pet-form"><div class="seg2"><button type="button" data-species="Dog" class="' + (p.species !== "Cat" ? "on" : "") + '">🐶 Dog</button><button type="button" data-species="Cat" class="' + (p.species === "Cat" ? "on" : "") + '">🐱 Cat</button></div>' +
         '<label>Name<input data-f="name" value="' + esc(p.name) + '" maxlength="60" placeholder="e.g. Biscuit"></label>' +
         '<div class="row2"><label>Breed<input data-f="breed" value="' + esc(p.breed) + '" maxlength="80" placeholder="e.g. Goldendoodle"></label>' +
@@ -580,7 +580,7 @@
       : r.account && r.account.indexOf("error:") === 0 ? '<section class="card nudge"><b>Your booking is confirmed</b><p class="muted small">We couldn\'t create your account (' + esc(r.account.slice(6)) + '). You can <a href="#join">try again</a> any time.</p></section>'
       : isStaff() ? ""
       : Api.kind !== "customer" ? '<section class="card nudge"><b>Want faster rebooking?</b><p class="muted small">Create a free account with ' + esc(B.contact.email) + ' and this booking will be saved to it.</p><a class="btn ghost full" href="#join">Create account</a></section>' : "";
-    U.view.innerHTML = '<div class="bk done"><div class="done-badge">' + U.icon("check") + "</div><h2>" + (isStaff() ? "Booked for " + esc(B.contact.name || "the customer") : "See you " + fmt(r.slot, { weekday: "long" }) + "!") + "</h2>" +
+    U.view.innerHTML = '<div class="bk done"><img class="done-art" src="../assets/app/confirmed.webp" alt="" width="480" height="480"><h2>' + (isStaff() ? "Booked for " + esc(B.contact.name || "the customer") : "See you " + fmt(r.slot, { weekday: "long" }) + "!") + "</h2>" +
       '<section class="card review"><div class="rv-when">' + U.icon("today") + "<div><b>" + longDate(r.slot) + "</b><span>" + timeLabel(r.slot) + " · " + mins(r.dur) + "</span></div></div>" +
       '<div class="rv-when">' + U.icon("nav") + "<div><b>" + esc(String(r.address || "").split(",")[0]) + "</b><span>" + esc(r.pets.join(", ")) + " · " + money(r.total) + "</span></div></div></section>" +
       (r.free ? '<section class="card nudge"><b>Free groom applied 🎉</b><p class="muted small">Thanks for being a loyal customer. Your loyalty card starts filling again after this visit.</p></section>' : "") +
@@ -605,7 +605,7 @@
       U.view.innerHTML =
         '<a class="card book-cta" href="#book"><div><b>Book a groom</b><small>Your address and pets are saved</small></div>' + U.icon("chev", "chev") + "</a>" +
         loyaltyCard(Api.data.loyalty) +
-        '<section class="card"><div class="card-head"><h2>Upcoming</h2></div>' + (up.length ? up.map(bookingRow).join("") : '<p class="muted">No visits booked yet.</p>') + "</section>" +
+        '<section class="card"><div class="card-head"><h2>Upcoming</h2></div>' + (up.length ? '<img class="van-way" src="../assets/app/van-on-way.webp" alt="" width="800" height="533" loading="lazy">' + up.map(bookingRow).join("") : '<div class="empty"><img src="../assets/app/empty-visits.webp" alt="" width="420" height="420" loading="lazy"><p class="muted">No visits booked yet.</p><a class="btn" href="#book">Book a groom</a></div>') + "</section>" +
         (past.length ? '<section class="card"><div class="card-head"><h2>Past visits</h2></div>' + past.map(function (b) { return bookingRow(b, true); }).join("") + "</section>" : "");
       $$("[data-cancel]").forEach(function (btn) {
         btn.onclick = function () {
@@ -656,7 +656,7 @@
     var pets = Api.data.pets || [];
     U.view.innerHTML = (pets.length ? pets.map(function (p) {
       var rs = rabiesState(p.rabies_cert_path, p.rabies_expires);
-      return '<div class="card petcard" data-id="' + p.id + '"><form class="petedit"><div class="pet-head">' + U.avatar({ name: p.name, color: p.color }, 44) + "<div><b>" + esc(p.name) + "</b><small>" + esc(p.species) + "</small></div></div>" +
+      return '<div class="card petcard" data-id="' + p.id + '"><form class="petedit"><div class="pet-head">' + U.avatar({ name: p.name, color: p.color, breed: p.breed, species: p.species }, 44) + "<div><b>" + esc(p.name) + "</b><small>" + esc(p.species) + "</small></div></div>" +
         '<div class="row2"><label>Name<input name="name" value="' + esc(p.name) + '" maxlength="60"></label><label>Breed<input name="breed" value="' + esc(p.breed || "") + '" maxlength="80"></label></div>' +
         '<div class="row2"><label>Weight (lb)<input name="weight" inputmode="decimal" value="' + (p.weight_lbs != null ? Number(p.weight_lbs) : "") + '"></label>' +
         '<label>Coat<input name="coat" value="' + esc(p.coat || "") + '" maxlength="60"></label></div><button class="btn ghost full" type="submit">Save</button></form>' +
@@ -666,7 +666,7 @@
         '<label class="filepick">' + (p.rabies_cert_path ? "Replace file" : "Choose file") + '<input type="file" name="rabies_file" accept="image/*,application/pdf"><span class="filename muted small">No file chosen</span></label></div>' +
         '<div class="petdoc-actions"><button class="btn full" type="button" data-upload>' + (p.rabies_cert_path ? "Save certificate" : "Upload certificate") + "</button>" +
         (p.rabies_cert_path ? '<button class="pill ghost" type="button" data-view>View</button><button class="pill ghost" type="button" data-remove>Remove</button>' : "") + "</div></div></div>";
-    }).join("") : '<section class="card"><p class="muted">Pets you book are saved here automatically.</p></section>') +
+    }).join("") : '<section class="card empty"><img src="../assets/app/empty-pets.webp" alt="" width="420" height="420" loading="lazy"><p class="muted">Pets you book are saved here automatically.</p></section>') +
       '<a class="btn full" href="#book">Book a groom</a>';
     $$(".petcard").forEach(function (card) {
       var pet = pets.find(function (x) { return x.id === card.dataset.id; });

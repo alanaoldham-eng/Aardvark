@@ -161,3 +161,65 @@ p{margin:0 0 1em}
   .phones .phone{width:240px;height:500px}
   .script-note.right{text-align:center}
 }
+
+/* ---------- photography ---------- */
+.hero-photo{position:relative;margin:0}
+.hero-photo img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:24px;box-shadow:var(--shadow)}
+.hero-badge{left:-18px;bottom:-22px;display:flex;flex-direction:column;gap:2px;max-width:260px}
+.hero-badge b{font-family:var(--serif);color:var(--green);font-size:1.05rem;line-height:1.2}
+.hero-badge span{font-size:.8rem;color:var(--muted)}
+@media (max-width:900px){.hero-badge{left:12px;bottom:-18px}}
+
+.how{padding:90px 0 30px}
+.how-grid{list-style:none;margin:36px 0 0;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.how-grid li{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column}
+.how-grid img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover}
+.how-grid b{display:flex;align-items:center;gap:10px;font-family:var(--serif);color:var(--green);font-size:1.2rem;padding:18px 22px 4px}
+.how-grid b span{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--rust);color:#fff;font:700 .9rem var(--sans);flex:none}
+.how-grid p{color:var(--muted);font-size:.95rem;padding:0 22px 22px;margin:0}
+
+.services{padding:70px 0 30px}
+.svc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:36px}
+.svc-grid figure{margin:0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.svc-grid img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;transition:transform .4s}
+.svc-grid figure:hover img{transform:scale(1.03)}
+.svc-grid figcaption{padding:16px 20px 20px;color:var(--muted);font-size:.92rem}
+.svc-grid figcaption b{display:block;font-family:var(--serif);color:var(--green);font-size:1.12rem;margin-bottom:2px}
+.svc-cta{text-align:center;margin-top:32px}
+
+.ways{padding:70px 0 30px}
+.ways-grid{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:36px}
+.ways-grid article{background:var(--green);color:#e9f1ec;border-radius:22px;overflow:hidden}
+.ways-grid img{display:block;width:100%;aspect-ratio:3/2;object-fit:cover}
+.ways-grid div{padding:22px 26px 26px}
+.ways-grid h3{color:#fff;font-size:1.4rem}
+.ways-grid p{margin:0;opacity:.88}
+
+.platform-split{display:grid;grid-template-columns:1fr 1.25fr;gap:48px;align-items:center}
+.platform-device{position:relative}
+
+.academy-photo{display:block;width:100%;aspect-ratio:3/2;object-fit:cover;border-radius:14px;margin-bottom:18px}
+
+.areas{padding:80px 0 50px}
+.area-grid{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:36px}
+.area-grid article{background:var(--paper);border:1px solid var(--line);border-radius:22px;overflow:hidden}
+.area-grid img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}
+.area-grid div{padding:22px 26px 26px}
+.area-grid p{color:var(--muted)}
+.pill-live,.pill-soon{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:999px;margin-bottom:10px}
+.pill-live{background:var(--green-soft);color:var(--green)}
+.pill-soon{background:var(--rust-soft);color:var(--rust)}
+
+.lineup{background:#f4ecdc;overflow:hidden}
+.lineup img{display:block;width:100%;max-width:1400px;margin:0 auto;aspect-ratio:3/1;object-fit:cover}
+
+.about-photo{border-radius:22px;box-shadow:var(--shadow);aspect-ratio:3/2;object-fit:cover;width:100%}
+
+@media (max-width:900px){
+  .how-grid,.svc-grid{grid-template-columns:1fr 1fr}
+  .ways-grid,.area-grid,.platform-split{grid-template-columns:1fr}
+}
+@media (max-width:600px){.how-grid{grid-template-columns:1fr}.svc-grid{gap:12px}.svc-grid figcaption{padding:10px 12px 14px;font-size:.8rem}.svc-grid figcaption b{font-size:.98rem}}
+@media (max-width:1180px) and (min-width:721px){.nav-links{gap:16px}.nav-links a:not(.btn){font-size:.86rem}.brand img{height:76px}}
+@media (max-width:900px) and (min-width:721px){.nav-links a[href="#platform"],.nav-links a[href="#about"]{display:none}}
+.platform-split{margin-bottom:56px}
